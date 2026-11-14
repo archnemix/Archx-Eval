@@ -115,8 +115,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: relay-test-logs
-          path: ci
+          path: |
+            ci/logs/test.txt
+            ci/logs/vet.txt
+            ci/logs/environment.txt
+            ci/outputs/coverage.out
+            ci/outputs/coverage.txt
+            ci/outputs/test-exit-code.txt
+            ci/outputs/vet-exit-code.txt
+            ci/outputs/binary.txt
+            ci/outputs/resolved-config.txt
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   # --------------------------------------------------------------- smoke ----
@@ -154,8 +164,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: relay-smoke-logs
-          path: ci
+          path: |
+            ci/logs/smoke.txt
+            ci/outputs/smoke-exit-code.txt
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   # --------------------------------------------------------- image build ----
@@ -209,8 +222,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: relay-image-logs
-          path: ci
+          path: |
+            ci/logs/docker-build.txt
+            ci/logs/docker-run.txt
+            ci/outputs/image-size.txt
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   # ------------------------------------------------------------- collect ----
@@ -238,7 +255,10 @@ jobs:
           if [ -d ci/_incoming ]; then
             for d in ci/_incoming/*/; do
               [ -d "$d" ] || continue
-              cp -r "$d"logs "$d"outputs ci/ 2>/dev/null || true
+              for sub in logs outputs; do
+                [ -d "${d}${sub}" ] || continue
+                cp -f "${d}${sub}"/* "ci/${sub}/" 2>/dev/null || true
+              done
             done
           fi
           rm -rf ci/_incoming
@@ -260,6 +280,12 @@ jobs:
             "smoke: ${{ needs.smoke.result }}" \
             "image: ${{ needs.image.result }}" \
             > ci/outputs/run-summary.txt
+          printf '%s\n' \
+            "smoke_checks=$(grep -c '  PASS  ' ci/logs/smoke.txt 2>/dev/null || echo 0)" \
+            "smoke_failures=$(grep -c '  FAIL  ' ci/logs/smoke.txt 2>/dev/null || echo 0)" \
+            "test_cases=$(grep -c '^=== RUN' ci/logs/test.txt 2>/dev/null || echo 0)" \
+            >> ci/outputs/run-summary.txt
+
           echo "== ci tree =="
           find ci -type f -not -path 'ci/trigger/*' | sort
           echo "== summary =="

@@ -1,2 +1,2 @@
 # Relay CI trigger — edit this file to start a run.
-# run: 3 (durable rate log, auth, ceilings, hardening)
+# run: 4 (verify scoped artifacts produce fresh logs)
