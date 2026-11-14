@@ -1,0 +1,229 @@
+name: relay
+
+# Triggered by editing a small control file, not by every push. The bot's own
+# result commit only touches ci/** so it can never re-trigger the workflow.
+on:
+  push:
+    paths:
+      - 'ci/trigger/relay.yml'
+  workflow_dispatch:
+
+# The commit-back step needs write access; nothing else does.
+permissions:
+  contents: write
+
+concurrency:
+  group: relay-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.22'
+  CGO_ENABLED: '0'
+
+jobs:
+  # ---------------------------------------------------------------- test ----
+  test:
+    name: test (vet + unit + race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: relay/go.mod
+
+      - name: Record environment
+        run: |
+          mkdir -p ../ci/logs ../ci/outputs
+          {
+            echo "go:      $(go version)"
+            echo "runner:  ${{ runner.os }} / ${{ runner.arch }}"
+            echo "cpus:    $(nproc)"
+            echo "memory:  $(free -h | awk '/Mem:/{print $2}')"
+            echo "commit:  ${{ github.sha }}"
+            echo "branch:  ${{ github.ref_name }}"
+            echo "started: $(date -u +%FT%TZ)"
+          } | tee ../ci/logs/environment.txt
+
+      - name: gofmt check
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo '::error::files need gofmt'; exit 1; }
+
+      - name: go vet
+        run: go vet ./... 2>&1 | tee ../ci/logs/vet.txt
+
+      - name: go test (race)
+        run: go test ./... -count=1 -race -coverprofile=../ci/outputs/coverage.out 2>&1 | tee ../ci/logs/test.txt
+
+      - name: Coverage summary
+        run: |
+          go tool cover -func=../ci/outputs/coverage.out | tee ../ci/outputs/coverage.txt
+          echo "---" >> ../ci/logs/test.txt
+          go tool cover -func=../ci/outputs/coverage.out | tail -1 >> ../ci/logs/test.txt
+
+      - name: Build binary
+        run: |
+          go build -trimpath -ldflags="-s -w -X github.com/archnemix/archx-eval/relay/internal/core.Version=${{ github.sha }}" -o ../ci/outputs/relayd ./cmd/relayd
+          ls -l ../ci/outputs/relayd | tee -a ../ci/logs/environment.txt
+          ../ci/outputs/relayd -print-config | tee ../ci/outputs/resolved-config.txt
+
+      - name: Upload logs for the collect job
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-test-logs
+          path: |
+            ci/logs/
+            ci/outputs/
+          retention-days: 1
+
+  # --------------------------------------------------------------- smoke ----
+  smoke:
+    name: smoke (real HTTP, no mocks)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: relay/go.mod
+
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq >/dev/null
+
+      - name: Run end-to-end smoke test
+        run: bash relay/scripts/smoke.sh 2>&1 | tee ci/logs/smoke.txt
+
+      - name: Upload logs for the collect job
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-smoke-logs
+          path: ci/logs/
+          retention-days: 1
+
+  # --------------------------------------------------------- image build ----
+  image:
+    name: image (static build + container)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container image
+        run: |
+          mkdir -p ci/logs
+          docker build -t archx-eval-relay:ci relay 2>&1 | tee ci/logs/docker-build.txt
+          docker image inspect archx-eval-relay:ci --format '{{.Size}} bytes' | tee ci/outputs/image-size.txt
+
+      - name: Verify the image serves traffic
+        run: |
+          docker run -d --name relay-ci -p 8081:7860 \
+            -e RELAY_SALT=ci-salt -e ALLOW_LOOPBACK=1 \
+            -v "$PWD/relay/testdata/bank:/app/bank:ro" \
+            archx-eval-relay:ci
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8081/health >/dev/null; then break; fi
+            sleep 0.5
+          done
+          {
+            echo "== health =="
+            curl -s http://127.0.0.1:8081/health | jq .
+            echo "== draw =="
+            curl -s -H 'Content-Type: application/json' \
+              -d '{"categories":["python"],"size":3,"device":{"machine_id":"4c4c4544-0044-3510-8054-b4c04f4e4e32","disk_uuid":"9f1b2c3d4e5f60718293a4b5c6d7e8f9","os_family":"linux","arch":"x86_64"}}' \
+              http://127.0.0.1:8081/v1/draw | jq '{count, by_category, shortfall}'
+            echo "== second draw (expect 429) =="
+            curl -s -o /dev/null -w 'status=%{http_code}\n' -H 'Content-Type: application/json' \
+              -d '{"categories":["python"],"size":3,"device":{"machine_id":"4c4c4544-0044-3510-8054-b4c04f4e4e32","disk_uuid":"9f1b2c3d4e5f60718293a4b5c6d7e8f9","os_family":"linux","arch":"x86_64"}}' \
+              http://127.0.0.1:8081/v1/draw
+          } 2>&1 | tee ci/logs/docker-run.txt
+          docker rm -f relay-ci
+
+      - name: Upload logs for the collect job
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-image-logs
+          path: |
+            ci/logs/
+            ci/outputs/
+          retention-days: 1
+
+  # ------------------------------------------------------------- collect ----
+  # Single writer. Pulls every job's artefacts and commits them into the repo
+  # under ci/, so nothing depends on GitHub's artifact storage being readable
+  # from outside. Runs even when an earlier job failed.
+  collect:
+    name: collect (commit results into ci/)
+    needs: [test, smoke, image]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ci/_incoming
+
+      - name: Merge artefacts into ci/
+        run: |
+          mkdir -p ci/logs ci/outputs
+          if [ -d ci/_incoming ]; then
+            cp -r ci/_incoming/*/. ci/ 2>/dev/null || true
+          fi
+          rm -rf ci/_incoming
+          # Never keep a build artefact in git; record its fingerprint instead.
+          if [ -f ci/outputs/relayd ]; then
+            { echo "binary_sha256: $(sha256sum ci/outputs/relayd | cut -d' ' -f1)"
+              echo "binary_bytes:  $(stat -c%s ci/outputs/relayd)"
+              echo "go_version:    $(head -1 ci/logs/environment.txt 2>/dev/null || echo unknown)"
+            } > ci/outputs/binary.txt
+            rm -f ci/outputs/relayd
+          fi
+          printf '%s\n' \
+            "job: ${{ github.job }}" \
+            "run: ${{ github.run_id }}" \
+            "commit: ${{ github.sha }}" \
+            "branch: ${{ github.ref_name }}" \
+            "finished: $(date -u +%FT%TZ)" \
+            "test: ${{ needs.test.result }}" \
+            "smoke: ${{ needs.smoke.result }}" \
+            "image: ${{ needs.image.result }}" \
+            > ci/outputs/run-summary.txt
+          echo "== ci tree =="
+          find ci -type f -not -path 'ci/trigger/*' | sort
+          echo "== summary =="
+          cat ci/outputs/run-summary.txt
+
+      - name: Verify the secret is present (never printed)
+        run: |
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "::warning::HF_TOKEN is not set; the dataset publish step will be skipped"
+          else
+            echo "HF_TOKEN present (length ${#HF_TOKEN}); value never printed"
+          fi
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Commit results
+        run: |
+          git config user.name  "arena-agent"
+          git config user.email "297053741+arena-agent@users.noreply.github.com"
+          git add -A ci
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "ci(relay): run ${{ github.run_id }} results
+
+          test=${{ needs.test.result }} smoke=${{ needs.smoke.result }} image=${{ needs.image.result }}"
+          git push

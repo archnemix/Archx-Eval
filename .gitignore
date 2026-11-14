@@ -1,0 +1,19 @@
+# Relay build output (never committed; CI records a fingerprint instead)
+relay/bin/
+relay/relayd
+
+# Local relay state: hashed records, raw identity rows, event logs
+relay/data/
+relay/bank/
+**/data/store/
+**/data/bank/
+
+# CI scratch (the committed results live in ci/logs and ci/outputs)
+ci/_incoming/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+relay/testdata/bank/usage.json

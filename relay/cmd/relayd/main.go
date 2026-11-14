@@ -1,0 +1,181 @@
+// Command relayd is the Archx-Eval relay: the API layer that sits between a
+// user's front-end runner and the private evaluation bank.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/archnemix/archx-eval/relay/internal/bank"
+	"github.com/archnemix/archx-eval/relay/internal/config"
+	"github.com/archnemix/archx-eval/relay/internal/core"
+	"github.com/archnemix/archx-eval/relay/internal/httpapi"
+	"github.com/archnemix/archx-eval/relay/internal/reputation"
+	"github.com/archnemix/archx-eval/relay/internal/store"
+)
+
+func main() {
+	var (
+		healthcheck = flag.Bool("healthcheck", false, "probe the local /health endpoint and exit")
+		printCfg    = flag.Bool("print-config", false, "print the resolved configuration and exit")
+		sync        = flag.Bool("sync", false, "publish the local data tree to the private dataset and exit")
+		dryRun      = flag.Bool("dry-run", false, "with -sync, write to SYNC_OUT_DIR instead of the dataset")
+	)
+	flag.Parse()
+
+	if err := run(*healthcheck, *printCfg, *sync, *dryRun); err != nil {
+		fmt.Fprintln(os.Stderr, "relayd:", err)
+		os.Exit(1)
+	}
+}
+
+func run(healthcheck, printCfg, doSync, dryRun bool) error {
+	cfg := config.Load()
+
+	if printCfg {
+		fmt.Printf("addr=%s\nbank_dir=%s\ndata_dir=%s\ndraw_max=%d\nwindow=%s\nstale_after=%d\nhf_enabled=%v\nsalt_default=%v\n",
+			cfg.Addr, cfg.BankDir, cfg.DataDir, cfg.DrawMax, cfg.Window, cfg.StaleAfterUses, cfg.HFEnabled, cfg.SaltIsDefault())
+		return nil
+	}
+	if healthcheck {
+		return probeHealth(cfg)
+	}
+
+	log := newLogger(cfg.LogFormat)
+	if cfg.SaltIsDefault() {
+		log.Warn("RELAY_SALT is unset: using the insecure development salt. Every marker hash will change once a real salt is configured.")
+	}
+	if !cfg.HFEnabled {
+		log.Warn("HF_TOKEN is unset: dataset publishing is disabled")
+	}
+
+	st, err := store.Open(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	bm, err := bank.Load(cfg.BankDir, cfg.StaleAfterUses)
+	if err != nil {
+		return err
+	}
+	rep, err := reputation.Load(cfg.ReputationFile)
+	if err != nil {
+		return err
+	}
+	if bm.Size() == 0 {
+		log.Warn("the bank is empty: /health will report not-ready until examples are published")
+	} else {
+		log.Info("bank loaded", "examples", bm.Size(), "categories", len(bm.Categories()))
+	}
+	if rep.Loaded() {
+		log.Info("reputation table loaded", "ranges", rep.Size())
+	}
+
+	svc := core.New(cfg, st, bm, rep)
+
+	if doSync {
+		return syncToDataset(cfg, svc, log, dryRun)
+	}
+
+	srv := httpapi.New(cfg, svc, log, os.Getenv("ADMIN_TOKEN"))
+	httpServer := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           srv,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Housekeeping: expire raw identity rows and persist counters.
+	go housekeep(ctx, svc, cfg, log)
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Info("listening", "addr", cfg.Addr, "version", core.Version)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Info("shutting down")
+	case err := <-errCh:
+		log.Error("server error", "err", err)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
+	if err := svc.Flush(); err != nil {
+		log.Error("flush failed", "err", err)
+	}
+	return nil
+}
+
+func housekeep(ctx context.Context, svc *core.Service, cfg config.Config, log *slog.Logger) {
+	pruneEvery := 6 * time.Hour
+	pruneTicker := time.NewTicker(pruneEvery)
+	flushTicker := time.NewTicker(cfg.FlushInterval)
+	defer pruneTicker.Stop()
+	defer flushTicker.Stop()
+
+	const rawTTL = 30 * 24 * time.Hour
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-pruneTicker.C:
+			n, err := svc.Prune(rawTTL)
+			if err != nil {
+				log.Error("prune failed", "err", err)
+				continue
+			}
+			if n > 0 {
+				log.Info("pruned raw identity rows", "count", n)
+			}
+		case <-flushTicker.C:
+			if err := svc.Flush(); err != nil {
+				log.Error("flush failed", "err", err)
+			}
+		}
+	}
+}
+
+func probeHealth(cfg config.Config) error {
+	addr := cfg.Addr
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/health")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("health probe returned %s", resp.Status)
+	}
+	return nil
+}
+
+func newLogger(format string) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if format == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+}

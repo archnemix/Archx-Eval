@@ -1,0 +1,493 @@
+// Package core is the relay's decision engine: it wires identity, storage,
+// limits and the bank together into the two operations the API exposes.
+//
+// It knows nothing about HTTP. That keeps the policy testable in isolation and
+// means the transport can change without touching a single rule.
+package core
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/archnemix/archx-eval/relay/internal/apierr"
+	"github.com/archnemix/archx-eval/relay/internal/bank"
+	"github.com/archnemix/archx-eval/relay/internal/config"
+	"github.com/archnemix/archx-eval/relay/internal/draw"
+	"github.com/archnemix/archx-eval/relay/internal/identity"
+	"github.com/archnemix/archx-eval/relay/internal/limits"
+	"github.com/archnemix/archx-eval/relay/internal/reputation"
+	"github.com/archnemix/archx-eval/relay/internal/store"
+)
+
+// Service is the relay core.
+type Service struct {
+	cfg   config.Config
+	store *store.Store
+	bank  *bank.Manager
+	rep   *reputation.Table
+	pol   limits.Policy
+	salt  []byte
+
+	// recent holds per-identity request timestamps for the spam ladder.
+	recentMu sync.Mutex
+	recent   map[string][]time.Time
+
+	now func() time.Time
+}
+
+// New builds a Service. Callers own the returned value's lifecycle.
+func New(cfg config.Config, st *store.Store, bm *bank.Manager, rep *reputation.Table) *Service {
+	return &Service{
+		cfg:    cfg,
+		store:  st,
+		bank:   bm,
+		rep:    rep,
+		salt:   cfg.Salt(),
+		recent: map[string][]time.Time{},
+		now:    func() time.Time { return time.Now().UTC() },
+		pol: limits.Policy{
+			Window:      cfg.Window,
+			SpamWindow:  cfg.SpamWindow,
+			SpamCount:   cfg.SpamCount,
+			SpamBan:     cfg.SpamBan,
+			BurstWindow: cfg.BurstWindow,
+			BurstCount:  cfg.BurstCount,
+			BurstBan:    cfg.BurstBan,
+		},
+	}
+}
+
+// SetClock overrides the clock (tests only).
+func (s *Service) SetClock(f func() time.Time) { s.now = f }
+
+// DrawInput is the caller-supplied half of a draw request.
+type DrawInput struct {
+	RequestID  string
+	Categories []string
+	Mix        map[string]float64
+	Size       int
+	Device     identity.Device
+	RemoteAddr netip.Addr
+	Headers    map[string][]string
+}
+
+// Grant is a successful draw.
+type Grant struct {
+	RequestID  string
+	IdentityID string
+	Examples   []*bank.Example
+	ByCat      map[string]int
+	IssuedAt   time.Time
+	NextDrawAt time.Time
+	Shortfall  int
+	Notes      []string
+}
+
+// Hash implements identity.HashFunc with a salted HMAC-SHA256, truncated to
+// 32 hex characters. The truncation keeps marker files short while leaving
+// 128 bits of collision resistance, which is plenty for this corpus.
+func (s *Service) Hash(kind, value string) string {
+	mac := hmac.New(sha256.New, s.salt)
+	mac.Write([]byte(kind))
+	mac.Write([]byte{0})
+	mac.Write([]byte(value))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
+}
+
+// RequestDraw runs the full admission pipeline.
+//
+// Order is deliberate and cheap-first:
+//  1. identity validation (free)
+//  2. VPN/privacy refusal (free)
+//  3. spam ladder (memory only)
+//  4. marker lookup (a handful of file reads)
+//  5. draw window (uses the record we already fetched)
+//  6. stock check (must happen before we record anything)
+//  7. persist usage and only then hand over examples
+func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error) {
+	now := s.now()
+
+	if err := draw.ValidateMix(in.Mix); err != nil {
+		return nil, apierr.BadRequest(err.Error())
+	}
+	size := in.Size
+	if size == 0 {
+		size = s.cfg.DrawMax
+		return nil, apierr.BadRequest("size is required")
+	}
+	if size < 0 {
+		return nil, apierr.BadRequest("size must be positive")
+	}
+	if size > s.cfg.DrawMax {
+		return nil, apierr.BadRequest(fmt.Sprintf("size may not exceed %d", s.cfg.DrawMax))
+	}
+
+	id, err := identity.FromRequest(in.RemoteAddr, in.Headers, in.Device, s.Hash, s.cfg.AllowLoopback)
+	if err != nil {
+		return nil, err
+	}
+	if s.rep.Loaded() {
+		if entry, ok := s.rep.Lookup(id.IP); ok {
+			if entry.Tor {
+				s.record(ctx, in.RequestID, "", "deny", "TOR_EXIT", id, 0)
+				return nil, apierr.Forbidden("PRIVACY_BLOCKED", "requests via Tor are not accepted")
+			}
+			id.Privacy = identity.SoftFlagsFromIP(id.Privacy, entry.Hosting || entry.VPN, entry.Abuser)
+		} else if identity.LooksHosted(id.IP) {
+			id.Privacy = identity.SoftFlagsFromIP(id.Privacy, true, 0)
+		}
+	} else if identity.LooksHosted(id.IP) {
+		id.Privacy = identity.SoftFlagsFromIP(id.Privacy, true, 0)
+	}
+	if id.Privacy.Blocked() {
+		s.record(ctx, in.RequestID, "", "deny", "PRIVACY_BLOCKED", id, 0)
+		return nil, apierr.Forbidden("PRIVACY_BLOCKED",
+			"this request appears to come from a masked network and is not accepted")
+	}
+
+	markerHashes := make([]string, 0, len(id.Markers))
+	for _, m := range id.Markers {
+		markerHashes = append(markerHashes, m.Hash)
+	}
+
+	// Spam ladder is checked before storage work so a flood costs us nothing.
+	s.recentMu.Lock()
+	times := append([]time.Time(nil), s.recent[s.keyFor(markerHashes)]...)
+	s.recentMu.Unlock()
+	if d := limits.EvaluateVolume(s.pol, times, now); !d.Allow {
+		// A ban needs a record to hang off; find or create one first.
+		rec, err := s.upsert(ctx, id, markerHashes, now)
+		if err != nil {
+			return nil, err
+		}
+		limits.ApplyBan(rec, d, now)
+		if err := s.store.Put(rec); err != nil {
+			return nil, apierr.Internal("could not record the ban")
+		}
+		s.record(ctx, in.RequestID, rec.ID, "ban", d.Code, id, int(d.RetryAfter.Seconds()))
+		return nil, limits.Refuse(d)
+	}
+	s.noteRequest(markerHashes, now)
+
+	matches, err := s.store.Lookup(markerHashes)
+	if err != nil {
+		return nil, apierr.Internal("identity lookup failed")
+	}
+	var rec *store.Record
+	if len(matches) > 0 {
+		rec = matches[0]
+		for _, m := range matches {
+			if m.LastSeen.After(rec.LastSeen) {
+				rec = m
+			}
+		}
+	}
+
+	if d := limits.EvaluateWindow(s.pol, rec, now); !d.Allow {
+		if rec != nil {
+			rec.Requests++
+			rec.LastSeen = now
+			s.mergeMarkers(rec, markerHashes)
+			if err := s.store.Put(rec); err != nil {
+				return nil, apierr.Internal("could not update identity")
+			}
+			s.recordRaw(rec.ID, id, now)
+		}
+		s.record(ctx, in.RequestID, idOf(rec), "deny", d.Code, id, int(d.RetryAfter.Seconds()))
+		return nil, limits.Refuse(d)
+	}
+
+	// Stock check before we commit to issuing anything.
+	result, err := draw.Select(s.bank, draw.Request{
+		Categories: in.Categories,
+		Mix:        in.Mix,
+		Size:       size,
+	})
+	if err != nil {
+		s.record(ctx, in.RequestID, idOf(rec), "deny", "INSUFFICIENT_STOCK", id, 0)
+		return nil, err
+	}
+
+	issued := make([]string, 0, len(result.Examples))
+	for _, ex := range result.Examples {
+		issued = append(issued, ex.ID)
+	}
+
+	if rec == nil {
+		rec = &store.Record{
+			ID:        newID(),
+			Markers:   markerHashes,
+			FirstSeen: now,
+		}
+	} else {
+		s.mergeMarkers(rec, markerHashes)
+	}
+	rec.LastSeen = now
+	rec.Requests++
+	rec.Draws++
+	rec.LastDraw = now
+	if err := s.store.Put(rec); err != nil {
+		return nil, apierr.Internal("could not persist identity")
+	}
+	s.bank.MarkUsed(issued, now)
+	if err := s.bank.SaveUsage(); err != nil {
+		// Usage persistence is important but must not fail the user's draw:
+		// the in-memory counter already prevents double-issue this process.
+		fmt.Fprintf(os.Stderr, "warn: usage save failed: %v\n", err)
+	}
+	s.recordRaw(rec.ID, id, now)
+	s.record(ctx, in.RequestID, rec.ID, "allow", "granted", id, 0)
+
+	return &Grant{
+		RequestID:  in.RequestID,
+		IdentityID: rec.ID,
+		Examples:   result.Examples,
+		ByCat:      result.ByCat,
+		IssuedAt:   now,
+		NextDrawAt: now.Add(s.cfg.Window),
+		Shortfall:  result.Shortfall,
+		Notes:      result.Notes,
+	}, nil
+}
+
+// upsert finds an existing record or builds an unsaved one.
+func (s *Service) upsert(ctx context.Context, id *identity.Identity, markers []string, now time.Time) (*store.Record, error) {
+	matches, err := s.store.Lookup(markers)
+	if err != nil {
+		return nil, apierr.Internal("identity lookup failed")
+	}
+	if len(matches) > 0 {
+		rec := matches[0]
+		s.mergeMarkers(rec, markers)
+		rec.LastSeen = now
+		return rec, nil
+	}
+	return &store.Record{ID: newID(), Markers: markers, FirstSeen: now, LastSeen: now}, nil
+}
+
+// mergeMarkers keeps a record's marker set current as a caller's device data
+// drifts (a new NIC, a reimaged disk) without ever dropping a known marker.
+func (s *Service) mergeMarkers(rec *store.Record, markers []string) {
+	have := make(map[string]bool, len(rec.Markers))
+	for _, m := range rec.Markers {
+		have[m] = true
+	}
+	for _, m := range markers {
+		if !have[m] {
+			rec.Markers = append(rec.Markers, m)
+			have[m] = true
+		}
+	}
+}
+
+func (s *Service) recordRaw(id string, ident *identity.Identity, now time.Time) {
+	raw := &store.RawIdentity{
+		ID:        id,
+		IP:        ident.IP.String(),
+		IPVersion: "v4",
+		Network:   ident.Network.String(),
+		MachineID: ident.RawMarks.MachineID,
+		DiskUUID:  ident.RawMarks.DiskUUID,
+		FirstSeen: now,
+		LastSeen:  now,
+	}
+	if ident.IP.Is6() {
+		raw.IPVersion = "v6"
+	}
+	if prev, ok := s.store.Raw(id); ok {
+		raw.FirstSeen = prev.FirstSeen
+	}
+	if err := s.store.PutRaw(raw); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: raw identity not persisted: %v\n", err)
+	}
+}
+
+func (s *Service) record(ctx context.Context, reqID, id, decision, reason string, ident *identity.Identity, retry int) {
+	if ident == nil {
+		return
+	}
+	ev := store.Event{
+		TS:         s.now(),
+		RequestID:  reqID,
+		IdentityID: id,
+		Decision:   decision,
+		Reason:     reason,
+		IPHash:     s.Hash(identity.MarkerIP, ident.IP.String()),
+		NetHash:    s.Hash("net", ident.Network.String()),
+		Country:    ident.Country,
+		OS:         ident.Device.OSFamily,
+		Arch:       ident.Device.Arch,
+		RetryAfter: retry,
+	}
+	if err := s.store.AppendEvent(ev); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: event not persisted: %v\n", err)
+	}
+}
+
+func (s *Service) keyFor(markers []string) string {
+	if len(markers) == 0 {
+		return ""
+	}
+	return markers[0]
+}
+
+func (s *Service) noteRequest(markers []string, now time.Time) {
+	key := s.keyFor(markers)
+	if key == "" {
+		return
+	}
+	cutoff := now.Add(-2 * s.pol.SpamBan)
+	s.recentMu.Lock()
+	defer s.recentMu.Unlock()
+	list := s.recent[key]
+	kept := list[:0]
+	for _, t := range list {
+		if !t.Before(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	s.recent[key] = append(kept, now)
+}
+
+// Health summarises readiness.
+type Health struct {
+	OK            bool           `json:"ok"`
+	Version       string         `json:"version"`
+	UptimeSeconds int64          `json:"uptime_s"`
+	Bank          map[string]int `json:"bank"`
+	Inventory     bank.Counts    `json:"inventory"`
+	Records       int            `json:"records"`
+	Markers       int            `json:"markers"`
+	Reputation    int            `json:"reputation_ranges"`
+	SaltIsDefault bool           `json:"salt_is_default"`
+}
+
+var startedAt = time.Now()
+
+// Version is stamped at build time via ldflags.
+var Version = "dev"
+
+// Health reports service state without touching the bank lists.
+func (s *Service) Health() Health {
+	recs, markers, _ := s.store.Stats()
+	return Health{
+		OK:            s.bank.Size() > 0,
+		Version:       Version,
+		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
+		Bank:          s.bank.Stats(),
+		Inventory:     s.bank.Inventory(),
+		Records:       recs,
+		Markers:       markers,
+		Reputation:    s.rep.Size(),
+		SaltIsDefault: s.cfg.SaltIsDefault(),
+	}
+}
+
+// Categories lists servable categories.
+func (s *Service) Categories() []string { return s.bank.Categories() }
+
+// StaleExamples exposes the stale list for the daily curator job.
+func (s *Service) StaleExamples() []bank.Example { return s.bank.Stale() }
+
+// Prune expires raw identity rows.
+func (s *Service) Prune(ttl time.Duration) (int, error) { return s.store.Prune(s.now(), ttl) }
+
+// Flush persists counters and the manifest.
+func (s *Service) Flush() error {
+	if err := s.bank.SaveUsage(); err != nil {
+		return err
+	}
+	return s.store.FlushIndex()
+}
+
+// ExportSnapshot copies the store tree into dir for the dataset mirror.
+func (s *Service) ExportSnapshot(dir string) ([]string, error) {
+	if err := s.Flush(); err != nil {
+		return nil, err
+	}
+	src := s.cfg.DataDir
+	var written []string
+	for _, sub := range []string{"identities", "markers", "events", "raw"} {
+		from := filepath.Join(src, sub)
+		to := filepath.Join(dir, sub)
+		n, err := copyTree(from, to)
+		if err != nil {
+			return written, err
+		}
+		written = append(written, n...)
+	}
+	return written, nil
+}
+
+func copyTree(from, to string) ([]string, error) {
+	var out []string
+	err := filepath.Walk(from, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		buf, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(to, rel)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dest, buf, 0o640); err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(filepath.Join(filepath.Base(from), rel)))
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return out, nil
+	}
+	return out, err
+}
+
+func idOf(rec *store.Record) string {
+	if rec == nil {
+		return ""
+	}
+	return rec.ID
+}
+
+// newID returns a random 128-bit hex identifier.
+func newID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure is not recoverable in any useful way here.
+		panic("core: entropy source unavailable")
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// SubmitResult records a benchmark report from a front-end runner.
+func (s *Service) SubmitResult(r store.Result) error {
+	return s.store.AppendResult(r)
+}
+
+// Erase deletes the sensitive row for an identity while keeping the hashed
+// record so existing bans still apply.
+func (s *Service) Erase(id string) (bool, error) {
+	return s.store.EraseRaw(id)
+}
