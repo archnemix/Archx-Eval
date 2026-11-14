@@ -18,7 +18,6 @@ concurrency:
 
 env:
   GO_VERSION: '1.22'
-  CGO_ENABLED: '0'
 
 jobs:
   # ---------------------------------------------------------------- test ----
@@ -54,19 +53,41 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; echo '::error::files need gofmt'; exit 1; }
 
       - name: go vet
-        run: go vet ./... 2>&1 | tee ../ci/logs/vet.txt
-
-      - name: go test (race)
-        run: go test ./... -count=1 -race -coverprofile=../ci/outputs/coverage.out 2>&1 | tee ../ci/logs/test.txt
-
-      - name: Coverage summary
         run: |
+          set -o pipefail
+          go vet ./... 2>&1 | tee ../ci/logs/vet.txt
+
+      # CGO_ENABLED=1 is required by the race detector. Setting it here rather
+      # than workflow-wide keeps the release build static while still letting
+      # CI run the detector.
+      - name: go test (race)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -o pipefail
+          go test ./... -count=1 -race -v 2>&1 | tee ../ci/logs/test.txt
+
+      - name: go test (coverage)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -o pipefail
+          go test ./... -count=1 -coverprofile=../ci/outputs/coverage.out 2>&1 \
+            | tee -a ../ci/logs/test.txt
           go tool cover -func=../ci/outputs/coverage.out | tee ../ci/outputs/coverage.txt
-          echo "---" >> ../ci/logs/test.txt
-          go tool cover -func=../ci/outputs/coverage.out | tail -1 >> ../ci/logs/test.txt
+
+      - name: Assert tests actually ran
+        run: |
+          count=$(grep -c '^=== RUN' ../ci/logs/test.txt || true)
+          echo "test cases executed: $count"
+          if [ "$count" -lt 40 ]; then
+            echo "::error::only $count test cases ran; expected the full suite"
+            exit 1
+          fi
 
       - name: Build binary
         run: |
+          set -o pipefail
           go build -trimpath -ldflags="-s -w -X github.com/archnemix/archx-eval/relay/internal/core.Version=${{ github.sha }}" -o ../ci/outputs/relayd ./cmd/relayd
           ls -l ../ci/outputs/relayd | tee -a ../ci/logs/environment.txt
           ../ci/outputs/relayd -print-config | tee ../ci/outputs/resolved-config.txt
@@ -75,9 +96,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: relay-test-logs
-          path: |
-            ci/logs/
-            ci/outputs/
+          path: ci
+          if-no-files-found: error
           retention-days: 1
 
   # --------------------------------------------------------------- smoke ----
@@ -98,13 +118,16 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq >/dev/null
 
       - name: Run end-to-end smoke test
-        run: bash relay/scripts/smoke.sh 2>&1 | tee ci/logs/smoke.txt
+        run: |
+          set -o pipefail
+          bash relay/scripts/smoke.sh 2>&1 | tee ci/logs/smoke.txt
 
       - name: Upload logs for the collect job
         uses: actions/upload-artifact@v4
         with:
           name: relay-smoke-logs
-          path: ci/logs/
+          path: ci
+          if-no-files-found: error
           retention-days: 1
 
   # --------------------------------------------------------- image build ----
@@ -150,9 +173,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: relay-image-logs
-          path: |
-            ci/logs/
-            ci/outputs/
+          path: ci
+          if-no-files-found: error
           retention-days: 1
 
   # ------------------------------------------------------------- collect ----
@@ -178,7 +200,10 @@ jobs:
         run: |
           mkdir -p ci/logs ci/outputs
           if [ -d ci/_incoming ]; then
-            cp -r ci/_incoming/*/. ci/ 2>/dev/null || true
+            for d in ci/_incoming/*/; do
+              [ -d "$d" ] || continue
+              cp -r "$d"logs "$d"outputs ci/ 2>/dev/null || true
+            done
           fi
           rm -rf ci/_incoming
           # Never keep a build artefact in git; record its fingerprint instead.
