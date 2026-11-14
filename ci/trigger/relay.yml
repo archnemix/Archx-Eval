@@ -1,2 +1,2 @@
 # Relay CI trigger — edit this file to start a run.
-# run: 4 (verify scoped artifacts produce fresh logs)
+# run: 5 (final verification)

@@ -17,3 +17,4 @@ ci/_incoming/
 .idea/
 .vscode/
 relay/testdata/bank/usage.json
+ci/outputs/*-exit-code.txt
