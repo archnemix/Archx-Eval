@@ -41,16 +41,16 @@ rate/34/net:cfb67c1d9c187c445030dea82f2f99f0.jsonl
 rate/80/global.jsonl
 rate/82/id:32c6e788faa2d9e1b50d94c113348f91.jsonl
 store/events/2026-11-14.jsonl
-store/identities/1b/42c254e4347c76f26cacaf31e718f991.json
+store/identities/e2/3881760d7718e04a5000a2757da937ba.json
 store/index.json
 store/markers/68/32c6e788faa2d9e1b50d94c113348f91.json
 store/markers/7b/c25d0bf389b7ddbae2216a76b6345f74.json
 store/markers/b8/8e0f43913d116c705661860f982d300b.json
 store/markers/ff/543e6af3a2e733816e326971b57cd8e6.json
-store/raw/1b/42c254e4347c76f26cacaf31e718f991.json
+store/raw/e2/3881760d7718e04a5000a2757da937ba.json
 
 == event log sample ==
-{"ts":"2026-11-14T15:00:09.218922581Z","request_id":"","identity_id":"42c254e4347c76f26cacaf31e718f991","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
-{"ts":"2026-11-14T15:00:09.228987662Z","request_id":"","identity_id":"42c254e4347c76f26cacaf31e718f991","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
+{"ts":"2026-11-14T15:34:07.851459392Z","request_id":"","identity_id":"3881760d7718e04a5000a2757da937ba","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
+{"ts":"2026-11-14T15:34:07.86672401Z","request_id":"","identity_id":"3881760d7718e04a5000a2757da937ba","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
 
 result: 21 passed, 0 failed
