@@ -53,6 +53,21 @@ type Config struct {
 
 	// FlushInterval is the maximum time a rejection is allowed to sit in
 	// memory before being persisted. Accepted draws always flush inline.
+	// RateDir holds the durable sliding-window log. It lives outside DataDir's
+	// mirrored tree because it is operational state, not identity data.
+	RateDir string
+
+	AccessToken string
+
+	// MetricsToken gates /metrics; empty means the endpoint is disabled.
+	MetricsToken string
+
+	// Network caps exist so one subnet cannot exhaust the whole bank.
+	NetWindow    time.Duration
+	NetMaxDraws  int
+	GlobalWindow time.Duration
+	GlobalMax    int
+
 	FlushInterval time.Duration
 
 	ReputationFile string
@@ -91,6 +106,16 @@ func Load() Config {
 		HFRepo:    envStr("HF_DATASET", "Archnemix/Archx-Eval"),
 		HFToken:   os.Getenv("HF_TOKEN"),
 		HFBaseURL: envStr("HF_BASE_URL", "https://huggingface.co"),
+
+		RateDir:     envStr("RATE_DIR", "rate"),
+		AccessToken: os.Getenv("ACCESS_TOKEN"),
+
+		MetricsToken: os.Getenv("METRICS_TOKEN"),
+
+		NetWindow:    envDur("NET_WINDOW", time.Hour),
+		NetMaxDraws:  envInt("NET_MAX_DRAWS", 60),
+		GlobalWindow: envDur("GLOBAL_WINDOW", time.Hour),
+		GlobalMax:    envInt("GLOBAL_MAX_DRAWS", 4000),
 
 		FlushInterval: envDur("FLUSH_INTERVAL", 5*time.Second),
 

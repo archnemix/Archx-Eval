@@ -16,11 +16,19 @@ import (
 	"github.com/archnemix/archx-eval/relay/internal/bank"
 	"github.com/archnemix/archx-eval/relay/internal/config"
 	"github.com/archnemix/archx-eval/relay/internal/core"
+	"github.com/archnemix/archx-eval/relay/internal/ratelog"
 	"github.com/archnemix/archx-eval/relay/internal/reputation"
 	"github.com/archnemix/archx-eval/relay/internal/store"
 )
 
 func newServer(t *testing.T, examples int) (*Server, *core.Service) {
+	t.Helper()
+	return newServerWith(t, examples, true)
+}
+
+// newServerWith builds a server whose loopback/private-address relaxation can
+// be turned off, so the production posture is testable.
+func newServerWith(t *testing.T, examples int, allowLoopback bool) (*Server, *core.Service) {
 	t.Helper()
 	dir := t.TempDir()
 	bankDir := filepath.Join(dir, "bank")
@@ -36,10 +44,15 @@ func newServer(t *testing.T, examples int) (*Server, *core.Service) {
 	}
 	cfg := config.Config{
 		BankDir: bankDir, DataDir: filepath.Join(dir, "data"),
+		RateDir: filepath.Join(dir, "rate"),
 		DrawMax: 75, StaleAfterUses: 3, Window: time.Hour,
 		SpamWindow: time.Minute, SpamCount: 30, SpamBan: 48 * time.Hour,
 		BurstWindow: 10 * time.Second, BurstCount: 15, BurstBan: 2 * time.Hour,
-		SaltSecret: "test-salt", MaxBodyBytes: 1 << 20, AllowLoopback: true,
+		SaltSecret: "test-salt", MaxBodyBytes: 1 << 20, AllowLoopback: allowLoopback,
+		AccessToken: "test-access-token", MetricsToken: "metrics-token",
+		NetWindow: time.Hour, NetMaxDraws: 1000,
+		GlobalWindow: time.Hour, GlobalMax: 100000,
+		RequestTimeout: 10 * time.Second,
 	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -50,7 +63,12 @@ func newServer(t *testing.T, examples int) (*Server, *core.Service) {
 		t.Fatal(err)
 	}
 	rep, _ := reputation.Load("")
-	svc := core.New(cfg, st, bm, rep)
+	rates, err := ratelog.Open(cfg.RateDir, 96*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rates.Close() })
+	svc := core.New(cfg, st, bm, rep, rates)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	return New(cfg, svc, log, "admin-token"), svc
 }
@@ -60,6 +78,7 @@ func post(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRec
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
 	req.RemoteAddr = "203.0.113.10:5555"
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-access-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -106,8 +125,8 @@ func TestDrawSetsRequestIDHeader(t *testing.T) {
 	if rec.Header().Get("X-Request-Id") == "" {
 		t.Fatal("expected an X-Request-Id header")
 	}
-	if rec.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("expected no-store cache header")
+	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
+		t.Fatalf("expected no-store cache header, got %q", got)
 	}
 }
 
@@ -273,6 +292,7 @@ func TestEraseRemovesRawOnly(t *testing.T) {
 	body := `{"identity_id":"` + out.IdentityID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/erase", bytes.NewBufferString(body))
 	req.RemoteAddr = "203.0.113.10:5555"
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer admin-token")
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)

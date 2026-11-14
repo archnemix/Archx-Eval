@@ -15,7 +15,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/archnemix/archx-eval/relay/internal/apierr"
@@ -24,6 +23,7 @@ import (
 	"github.com/archnemix/archx-eval/relay/internal/draw"
 	"github.com/archnemix/archx-eval/relay/internal/identity"
 	"github.com/archnemix/archx-eval/relay/internal/limits"
+	"github.com/archnemix/archx-eval/relay/internal/ratelog"
 	"github.com/archnemix/archx-eval/relay/internal/reputation"
 	"github.com/archnemix/archx-eval/relay/internal/store"
 )
@@ -37,23 +37,24 @@ type Service struct {
 	pol   limits.Policy
 	salt  []byte
 
-	// recent holds per-identity request timestamps for the spam ladder.
-	recentMu sync.Mutex
-	recent   map[string][]time.Time
+	// rates is the durable sliding-window log behind the spam ladder and the
+	// network ceilings. It survives a process restart, which matters because
+	// a Hugging Face Space stops and restarts constantly.
+	rates *ratelog.Log
 
 	now func() time.Time
 }
 
 // New builds a Service. Callers own the returned value's lifecycle.
-func New(cfg config.Config, st *store.Store, bm *bank.Manager, rep *reputation.Table) *Service {
+func New(cfg config.Config, st *store.Store, bm *bank.Manager, rep *reputation.Table, rates *ratelog.Log) *Service {
 	return &Service{
-		cfg:    cfg,
-		store:  st,
-		bank:   bm,
-		rep:    rep,
-		salt:   cfg.Salt(),
-		recent: map[string][]time.Time{},
-		now:    func() time.Time { return time.Now().UTC() },
+		cfg:   cfg,
+		store: st,
+		bank:  bm,
+		rep:   rep,
+		salt:  cfg.Salt(),
+		rates: rates,
+		now:   func() time.Time { return time.Now().UTC() },
 		pol: limits.Policy{
 			Window:      cfg.Window,
 			SpamWindow:  cfg.SpamWindow,
@@ -130,6 +131,14 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 	if size > s.cfg.DrawMax {
 		return nil, apierr.BadRequest(fmt.Sprintf("size may not exceed %d", s.cfg.DrawMax))
 	}
+	// Bound the request shape itself: an unbounded category list or mix map is
+	// cheap to send and expensive to process.
+	if len(in.Categories) > 32 {
+		return nil, apierr.BadRequest("at most 32 categories may be requested")
+	}
+	if len(in.Mix) > 32 {
+		return nil, apierr.BadRequest("at most 32 mix weights may be supplied")
+	}
 
 	id, err := identity.FromRequest(in.RemoteAddr, in.Headers, in.Device, s.Hash, s.cfg.AllowLoopback)
 	if err != nil {
@@ -159,11 +168,10 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 		markerHashes = append(markerHashes, m.Hash)
 	}
 
-	// Spam ladder is checked before storage work so a flood costs us nothing.
-	s.recentMu.Lock()
-	times := append([]time.Time(nil), s.recent[s.keyFor(markerHashes)]...)
-	s.recentMu.Unlock()
-	if d := limits.EvaluateVolume(s.pol, times, now); !d.Allow {
+	// Spam ladder is checked before storage work so a flood costs us nothing,
+	// and it reads a durable log so a restart cannot reset the counters.
+	rateKey := s.rateKey(markerHashes)
+	if d := s.evaluateVolume(rateKey, now); !d.Allow {
 		// A ban needs a record to hang off; find or create one first.
 		rec, err := s.upsert(ctx, id, markerHashes, now)
 		if err != nil {
@@ -176,7 +184,23 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 		s.record(ctx, in.RequestID, rec.ID, "ban", d.Code, id, int(d.RetryAfter.Seconds()))
 		return nil, limits.Refuse(d)
 	}
-	s.noteRequest(markerHashes, now)
+	if err := s.rates.Record(rateKey, now); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: rate event not persisted: %v\n", err)
+	}
+	if err := s.rates.Record(s.netKey(id.Network), now); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: network rate event not persisted: %v\n", err)
+	}
+	if err := s.rates.Record(globalKey, now); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: global rate event not persisted: %v\n", err)
+	}
+
+	// Network and global ceilings: a single subnet, or the service as a whole,
+	// may not convert traffic into bank inventory faster than this. Checked
+	// before the draw so a refused request consumes nothing.
+	if d := s.evaluateCeilings(id.Network, now); !d.Allow {
+		s.record(ctx, in.RequestID, "", "deny", d.Code, id, int(d.RetryAfter.Seconds()))
+		return nil, limits.Refuse(d)
+	}
 
 	matches, err := s.store.Lookup(markerHashes)
 	if err != nil {
@@ -259,6 +283,31 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 	}, nil
 }
 
+// Authenticate verifies the caller's access token. Draws are closed-loop: a
+// token is required so that every draw can be traced to a registered runner,
+// which is what makes the abuse ladder enforceable at all.
+func (s *Service) Authenticate(token string) error {
+	if s.cfg.AccessToken == "" {
+		return apierr.Forbidden("ACCESS_DISABLED",
+			"this relay has no access token configured and is not accepting draws")
+	}
+	if !constantTimeEqual(token, s.cfg.AccessToken) {
+		return apierr.Forbidden("ACCESS_DENIED", "a valid access token is required")
+	}
+	return nil
+}
+
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := 0; i < len(a); i++ {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
+}
+
 // upsert finds an existing record or builds an unsaved one.
 func (s *Service) upsert(ctx context.Context, id *identity.Identity, markers []string, now time.Time) (*store.Record, error) {
 	matches, err := s.store.Lookup(markers)
@@ -333,29 +382,75 @@ func (s *Service) record(ctx context.Context, reqID, id, decision, reason string
 	}
 }
 
-func (s *Service) keyFor(markers []string) string {
+// rateKey is the durable log key for an identity. Identity markers are already
+// salted hashes, so the key leaks nothing.
+func (s *Service) rateKey(markers []string) string {
 	if len(markers) == 0 {
 		return ""
 	}
-	return markers[0]
+	return "id:" + markers[0]
 }
 
-func (s *Service) noteRequest(markers []string, now time.Time) {
-	key := s.keyFor(markers)
-	if key == "" {
-		return
+func (s *Service) netKey(p netip.Prefix) string {
+	if !p.IsValid() {
+		return ""
 	}
-	cutoff := now.Add(-2 * s.pol.SpamBan)
-	s.recentMu.Lock()
-	defer s.recentMu.Unlock()
-	list := s.recent[key]
-	kept := list[:0]
-	for _, t := range list {
-		if !t.Before(cutoff) {
-			kept = append(kept, t)
+	return "net:" + s.Hash("net", p.String())
+}
+
+const globalKey = "global"
+
+// evaluateVolume rebuilds the request history from the durable log and asks
+// the limits package for a verdict.
+func (s *Service) evaluateVolume(key string, now time.Time) limits.Decision {
+	if key == "" {
+		return limits.Decision{Allow: true}
+	}
+	burst := s.rates.Count(key, s.cfg.BurstWindow, now)
+	sustained := s.rates.Count(key, s.cfg.SpamWindow, now)
+
+	if s.cfg.BurstCount > 0 && burst >= s.cfg.BurstCount {
+		return limits.Decision{
+			Code:       "SPAM_BURST",
+			Reason:     "request rate far above the permitted rate",
+			RetryAfter: s.cfg.BurstBan,
+			Ban:        s.cfg.BurstBan,
 		}
 	}
-	s.recent[key] = append(kept, now)
+	if s.cfg.SpamCount > 0 && sustained >= s.cfg.SpamCount {
+		return limits.Decision{
+			Code:       "SPAM_SUSTAINED",
+			Reason:     "too many requests in the spam window",
+			RetryAfter: s.cfg.SpamBan,
+			Ban:        s.cfg.SpamBan,
+		}
+	}
+	return limits.Decision{Allow: true}
+}
+
+// evaluateCeilings applies subnet and service-wide draw ceilings. These are
+// separate from the per-identity ladder: they protect the inventory rather than
+// punishing one caller.
+func (s *Service) evaluateCeilings(p netip.Prefix, now time.Time) limits.Decision {
+	if s.cfg.NetMaxDraws > 0 {
+		if n := s.rates.Count(s.netKey(p), s.cfg.NetWindow, now); n > s.cfg.NetMaxDraws {
+			return limits.Decision{
+				Code:       "NETWORK_CEILING",
+				Reason:     "this network has reached its draw ceiling",
+				RetryAfter: s.cfg.NetWindow,
+			}
+		}
+	}
+	if s.cfg.GlobalMax > 0 {
+		if n := s.rates.Count(globalKey, s.cfg.GlobalWindow, now); n > s.cfg.GlobalMax {
+			return limits.Decision{
+				Code:       "GLOBAL_CEILING",
+				Reason:     "the bank is at capacity for this window",
+				RetryAfter: s.cfg.GlobalWindow,
+			}
+		}
+	}
+	return limits.Decision{Allow: true}
 }
 
 // Health summarises readiness.
@@ -401,6 +496,15 @@ func (s *Service) StaleExamples() []bank.Example { return s.bank.Stale() }
 // Prune expires raw identity rows.
 func (s *Service) Prune(ttl time.Duration) (int, error) { return s.store.Prune(s.now(), ttl) }
 
+// Maintain compacts and fsyncs the durable rate log. Called on a timer.
+func (s *Service) Maintain(now time.Time) (int, error) {
+	n, err := s.rates.Compact(now)
+	if err != nil {
+		return n, err
+	}
+	return n, s.rates.Flush()
+}
+
 // Flush persists counters and the manifest.
 func (s *Service) Flush() error {
 	if err := s.bank.SaveUsage(); err != nil {
@@ -408,6 +512,9 @@ func (s *Service) Flush() error {
 	}
 	return s.store.FlushIndex()
 }
+
+// FlushRates fsyncs the durable rate log; called on shutdown.
+func (s *Service) FlushRates() error { return s.rates.Flush() }
 
 // ExportSnapshot copies the store tree into dir for the dataset mirror.
 func (s *Service) ExportSnapshot(dir string) ([]string, error) {

@@ -1,2 +1,2 @@
 # Relay CI trigger — edit this file to start a run.
-# run: 2 (fix race detector, pipefail, artifact layout)
+# run: 3 (durable rate log, auth, ceilings, hardening)

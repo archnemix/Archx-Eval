@@ -74,10 +74,21 @@ func (s *Server) handleCategories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
+	// Closed loop: every draw must be attributable to a registered runner.
+	if err := s.svc.Authenticate(bearerToken(r)); err != nil {
+		writeError(w, err)
+		return
+	}
 	var req drawRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
 		return
+	}
+	for _, c := range req.Categories {
+		if hasControlChars(c) {
+			writeError(w, apierr.BadRequest("category names may not contain control characters"))
+			return
+		}
 	}
 	reqID := r.Header.Get("X-Request-Id")
 	if req.RequestID != "" {
@@ -183,6 +194,10 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Items) > 500 {
 		writeError(w, apierr.BadRequest("at most 500 items may be reported at once"))
+		return
+	}
+	if err := validateFeedbackText(body); err != nil {
+		writeError(w, err)
 		return
 	}
 
@@ -342,6 +357,77 @@ func canonicalHeader(k string) string {
 		parts[i] = strings.ToUpper(p[:1]) + p[1:]
 	}
 	return strings.Join(parts, "-")
+}
+
+// bearerToken extracts the access token from the standard header, falling back
+// to a custom header for clients that cannot set Authorization.
+func bearerToken(r *http.Request) string {
+	if v := r.Header.Get("Authorization"); v != "" {
+		return strings.TrimSpace(strings.TrimPrefix(v, "Bearer "))
+	}
+	return strings.TrimSpace(r.Header.Get("X-Access-Token"))
+}
+
+// Field caps. These exist so the feedback endpoint cannot be used as free
+// object storage: every accepted byte becomes our bandwidth, disk and bill.
+const (
+	maxAnswerBytes = 8 << 10
+	maxCodeBytes   = 64 << 10
+	maxErrorBytes  = 512
+	maxModelIDLen  = 128
+)
+
+func validateFeedbackText(body struct {
+	RequestID  string         `json:"request_id"`
+	IdentityID string         `json:"identity_id"`
+	ModelID    string         `json:"model_id"`
+	RunnerVer  string         `json:"runner_version"`
+	OS         string         `json:"os"`
+	Arch       string         `json:"arch"`
+	DurationS  float64        `json:"duration_s"`
+	Items      []feedbackItem `json:"items"`
+}) error {
+	if len(body.ModelID) > maxModelIDLen {
+		return apierr.BadRequest("model_id is too long")
+	}
+	if len(body.RunnerVer) > 64 || len(body.OS) > 32 || len(body.Arch) > 32 {
+		return apierr.BadRequest("runner metadata is too long")
+	}
+	for _, it := range body.Items {
+		if len(it.ExampleID) > 128 {
+			return apierr.BadRequest("example_id is too long")
+		}
+		if len(it.Answer) > maxAnswerBytes {
+			return apierr.BadRequest("answer is too long")
+		}
+		if len(it.Code) > maxCodeBytes {
+			return apierr.BadRequest("code is too long")
+		}
+		if len(it.Error) > maxErrorBytes {
+			return apierr.BadRequest("error is too long")
+		}
+		if len(it.Category) > 64 || len(it.Difficulty) > 32 {
+			return apierr.BadRequest("category or difficulty is too long")
+		}
+		// Control characters would let a caller forge lines in the append-only
+		// JSONL result log. Reject rather than sanitise: silent rewriting of a
+		// submitted answer would corrupt the benchmark data.
+		for _, field := range []string{it.ExampleID, it.Category, it.Difficulty} {
+			if hasControlChars(field) {
+				return apierr.BadRequest("identifiers may not contain control characters")
+			}
+		}
+	}
+	return nil
+}
+
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func newRequestID() string {

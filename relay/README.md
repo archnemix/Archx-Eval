@@ -46,8 +46,13 @@ relay/
 | `GET` | `/v1/categories` | servable categories |
 | `POST` | `/v1/draw` | request up to `DRAW_MAX` examples |
 | `POST` | `/v1/feedback` | report runner results back |
+| `GET` | `/metrics` | *metrics token* — Prometheus exposition |
 | `GET` | `/v1/stale` | *admin* — examples that hit the stale threshold |
 | `POST` | `/v1/erase` | *admin* — delete the raw row for an identity |
+
+`POST /v1/draw` requires `Authorization: Bearer $ACCESS_TOKEN` (or
+`X-Access-Token`). A relay with no `ACCESS_TOKEN` configured refuses every draw:
+it fails closed.
 
 `POST /v1/draw`:
 
@@ -104,8 +109,29 @@ is the classic rate-limit bypass.
 | `BURST_BAN` | `2h` | burst penalty |
 | `SPAM_COUNT` / `SPAM_WINDOW` | `30` / `60s` | sustained limit |
 | `SPAM_BAN` | `48h` | sustained penalty |
+| `NET_MAX_DRAWS` / `NET_WINDOW` | `60` / `1h` | per-subnet ceiling |
+| `GLOBAL_MAX_DRAWS` / `GLOBAL_WINDOW` | `4000` / `1h` | service-wide ceiling |
 | raw row TTL | `720h` (30 days) | then `raw/` is pruned; hashed records persist |
 | ban escalation | `×2, ×3 …` capped at 14 days | repeat offenders |
+
+## Persistence
+
+Two directories hold state, and both must live on persistent storage or a
+restart silently forgives every limit:
+
+| Directory | Contents | Survives restart |
+|---|---|---|
+| `DATA_DIR` | hashed identities, marker index, raw rows, event log, results | yes, reloaded on boot |
+| `RATE_DIR` | durable sliding-window request log | yes, replayed on boot |
+
+`RATE_DIR` is deliberately **outside** `DATA_DIR` so it never ends up in the
+dataset mirror: it is operational state, not identity data.
+
+The rate log writes each event with a single `append(2)` before answering, so it
+survives the process being stopped (the Spaces sleep case), and fsyncs on a
+timer so a machine crash loses at most `FLUSH_INTERVAL` of events. Both
+behaviours are covered by tests that rebuild the service from disk and assert
+the ban still holds.
 
 ## Running locally
 
@@ -128,6 +154,14 @@ ALLOW_LOOPBACK=1 \
 `ALLOW_LOOPBACK=1` exists only for local development; without it loopback and
 private addresses are refused, because a private address on a public request
 means we cannot rate-limit the caller fairly.
+
+## Security posture
+
+See [`../SECURITY.md`](../SECURITY.md) for the threat model. In short: per-IP,
+per-marker and per-subnet limits, a durable ladder that survives restarts,
+bearer-token gating on draws, strict header policy, bounded request shapes,
+answer material never serialised, and raw identity data kept out of the public
+tree.
 
 ## Configuration
 

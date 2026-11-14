@@ -55,33 +55,52 @@ jobs:
       - name: go vet
         run: |
           set -o pipefail
+          set +e
           go vet ./... 2>&1 | tee ../ci/logs/vet.txt
+          echo "$?" > ../ci/outputs/vet-exit-code.txt
 
       # CGO_ENABLED=1 is required by the race detector. Setting it here rather
       # than workflow-wide keeps the release build static while still letting
       # CI run the detector.
+      # Outcomes are captured rather than aborting, because the log is the
+      # deliverable: a failing suite must still be committed so it can be read.
       - name: go test (race)
         env:
           CGO_ENABLED: '1'
         run: |
           set -o pipefail
+          set +e
           go test ./... -count=1 -race -v 2>&1 | tee ../ci/logs/test.txt
+          echo "$?" > ../ci/outputs/test-exit-code.txt
 
       - name: go test (coverage)
         env:
           CGO_ENABLED: '1'
         run: |
           set -o pipefail
+          set +e
           go test ./... -count=1 -coverprofile=../ci/outputs/coverage.out 2>&1 \
             | tee -a ../ci/logs/test.txt
           go tool cover -func=../ci/outputs/coverage.out | tee ../ci/outputs/coverage.txt
 
-      - name: Assert tests actually ran
+      - name: Assert the suite really ran and passed
         run: |
           count=$(grep -c '^=== RUN' ../ci/logs/test.txt || true)
+          code=$(cat ../ci/outputs/test-exit-code.txt 2>/dev/null || echo 1)
+          vet=$(cat ../ci/outputs/vet-exit-code.txt 2>/dev/null || echo 1)
           echo "test cases executed: $count"
+          echo "test exit code:      $code"
+          echo "vet exit code:       $vet"
           if [ "$count" -lt 40 ]; then
             echo "::error::only $count test cases ran; expected the full suite"
+            exit 1
+          fi
+          if [ "$code" != "0" ]; then
+            echo "::error::the test suite failed (exit $code)"
+            exit 1
+          fi
+          if [ "$vet" != "0" ]; then
+            echo "::error::go vet failed (exit $vet)"
             exit 1
           fi
 
@@ -120,7 +139,16 @@ jobs:
       - name: Run end-to-end smoke test
         run: |
           set -o pipefail
+          set +e
           bash relay/scripts/smoke.sh 2>&1 | tee ci/logs/smoke.txt
+          echo "$?" > ci/outputs/smoke-exit-code.txt
+
+      - name: Assert the smoke test passed
+        run: |
+          code=$(cat ci/outputs/smoke-exit-code.txt 2>/dev/null || echo 1)
+          fails=$(grep -c '  FAIL  ' ci/logs/smoke.txt || true)
+          echo "smoke exit: $code, failed checks: $fails"
+          [ "$code" = "0" ] && [ "$fails" = "0" ] || { echo "::error::smoke test failed"; exit 1; }
 
       - name: Upload logs for the collect job
         uses: actions/upload-artifact@v4
@@ -147,8 +175,10 @@ jobs:
 
       - name: Verify the image serves traffic
         run: |
+          set +e
           docker run -d --name relay-ci -p 8081:7860 \
             -e RELAY_SALT=ci-salt -e ALLOW_LOOPBACK=1 \
+            -e ACCESS_TOKEN=ci-token -e ADMIN_TOKEN=ci-admin \
             -v "$PWD/relay/testdata/bank:/app/bank:ro" \
             archx-eval-relay:ci
           for i in $(seq 1 40); do
@@ -159,15 +189,21 @@ jobs:
             echo "== health =="
             curl -s http://127.0.0.1:8081/health | jq .
             echo "== draw =="
-            curl -s -H 'Content-Type: application/json' \
+            curl -s -H 'Content-Type: application/json' -H 'Authorization: Bearer ci-token' \
               -d '{"categories":["python"],"size":3,"device":{"machine_id":"4c4c4544-0044-3510-8054-b4c04f4e4e32","disk_uuid":"9f1b2c3d4e5f60718293a4b5c6d7e8f9","os_family":"linux","arch":"x86_64"}}' \
               http://127.0.0.1:8081/v1/draw | jq '{count, by_category, shortfall}'
             echo "== second draw (expect 429) =="
-            curl -s -o /dev/null -w 'status=%{http_code}\n' -H 'Content-Type: application/json' \
+            curl -s -o /dev/null -w 'status=%{http_code}\n' -H 'Content-Type: application/json' -H 'Authorization: Bearer ci-token' \
               -d '{"categories":["python"],"size":3,"device":{"machine_id":"4c4c4544-0044-3510-8054-b4c04f4e4e32","disk_uuid":"9f1b2c3d4e5f60718293a4b5c6d7e8f9","os_family":"linux","arch":"x86_64"}}' \
               http://127.0.0.1:8081/v1/draw
           } 2>&1 | tee ci/logs/docker-run.txt
           docker rm -f relay-ci
+
+      - name: Assert the container answered correctly
+        run: |
+          grep -q '"ok": true' ci/logs/docker-run.txt || { echo "::error::container health check failed"; exit 1; }
+          grep -q 'status=429' ci/logs/docker-run.txt || { echo "::error::window enforcement failed inside the container"; exit 1; }
+          echo "container behaviour verified"
 
       - name: Upload logs for the collect job
         uses: actions/upload-artifact@v4

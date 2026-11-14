@@ -13,6 +13,7 @@ import (
 	"github.com/archnemix/archx-eval/relay/internal/bank"
 	"github.com/archnemix/archx-eval/relay/internal/config"
 	"github.com/archnemix/archx-eval/relay/internal/identity"
+	"github.com/archnemix/archx-eval/relay/internal/ratelog"
 	"github.com/archnemix/archx-eval/relay/internal/reputation"
 	"github.com/archnemix/archx-eval/relay/internal/store"
 )
@@ -23,6 +24,7 @@ type harness struct {
 	cfg   config.Config
 	now   time.Time
 	store *store.Store
+	rates *ratelog.Log
 }
 
 func newHarness(t *testing.T, examplesPerCat int) *harness {
@@ -43,6 +45,7 @@ func newHarness(t *testing.T, examplesPerCat int) *harness {
 	cfg := config.Config{
 		BankDir:        bankDir,
 		DataDir:        filepath.Join(dir, "data"),
+		RateDir:        filepath.Join(dir, "rate"),
 		DrawMax:        75,
 		StaleAfterUses: 3,
 		Window:         time.Hour,
@@ -54,6 +57,11 @@ func newHarness(t *testing.T, examplesPerCat int) *harness {
 		BurstBan:       2 * time.Hour,
 		SaltSecret:     "test-salt",
 		AllowLoopback:  true,
+		AccessToken:    "test-access-token",
+		NetWindow:      time.Hour,
+		NetMaxDraws:    1000,
+		GlobalWindow:   time.Hour,
+		GlobalMax:      100000,
 	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -67,9 +75,15 @@ func newHarness(t *testing.T, examplesPerCat int) *harness {
 	if err != nil {
 		t.Fatalf("reputation: %v", err)
 	}
-	svc := New(cfg, st, bm, rep)
-	h := &harness{svc: svc, bankM: bm, cfg: cfg, now: time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC), store: st}
+	rates, err := ratelog.Open(cfg.RateDir, 96*time.Hour)
+	if err != nil {
+		t.Fatalf("ratelog: %v", err)
+	}
+	t.Cleanup(func() { _ = rates.Close() })
+	svc := New(cfg, st, bm, rep, rates)
+	h := &harness{svc: svc, bankM: bm, cfg: cfg, now: time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC), store: st, rates: rates}
 	svc.SetClock(func() time.Time { return h.now })
+	rates.SetClock(func() time.Time { return h.now })
 	return h
 }
 

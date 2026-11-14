@@ -20,16 +20,18 @@ import (
 
 // Server wraps the core service with HTTP concerns.
 type Server struct {
-	cfg   config.Config
-	svc   *core.Service
-	log   *slog.Logger
-	mux   *http.ServeMux
-	admin string
+	cfg     config.Config
+	svc     *core.Service
+	log     *slog.Logger
+	mux     *http.ServeMux
+	admin   string
+	metrics string
+	handler http.Handler
 }
 
 // New builds a Server. The returned value implements http.Handler.
 func New(cfg config.Config, svc *core.Service, log *slog.Logger, adminToken string) *Server {
-	s := &Server{cfg: cfg, svc: svc, log: log, admin: adminToken}
+	s := &Server{cfg: cfg, svc: svc, log: log, admin: adminToken, metrics: cfg.MetricsToken}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -39,30 +41,34 @@ func New(cfg config.Config, svc *core.Service, log *slog.Logger, adminToken stri
 	mux.HandleFunc("POST /v1/feedback", s.handleFeedback)
 	mux.HandleFunc("GET /v1/stale", s.handleStale)
 	mux.HandleFunc("POST /v1/erase", s.handleErase)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.mux = mux
+	// Cross-cutting middleware is layered here, outside ServeHTTP, so the
+	// health probe is cheap and everything else gets the full treatment.
+	s.handler = s.withSecurityHeaders(s.withBodyLimit(s.withTimeout(mux)))
 	return s
 }
 
-// ServeHTTP applies the cross-cutting concerns in a fixed order: panic safety,
-// request id, size limit, access log.
+// ServeHTTP applies the cross-cutting concerns in a fixed order:
+// panic safety, request id, security headers, body limit, timeout, access log.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	reqID := r.Header.Get("X-Request-Id")
 	if reqID == "" {
 		reqID = newRequestID()
+	} else if len(reqID) > 64 {
+		// Never echo an unbounded client-supplied value back in a header.
+		reqID = newRequestID()
 	}
 	w.Header().Set("X-Request-Id", reqID)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "no-store")
-
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
 
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
 		if p := recover(); p != nil {
+			// A panic must never reach the client as a stack trace or a 200.
 			s.log.Error("panic recovered",
 				"request_id", reqID,
+				"path", r.URL.Path,
 				"panic", p,
 				"stack", string(debug.Stack()),
 			)
@@ -70,18 +76,66 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeError(rec, apierr.Internal("unexpected server error"))
 			}
 		}
-		s.log.Info("request",
-			"request_id", reqID,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"bytes", rec.bytes,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"ip_hash_absent", true,
-		)
 	}()
+	s.handler.ServeHTTP(rec, r)
 
-	s.mux.ServeHTTP(rec, r)
+	s.log.Info("request",
+		"request_id", reqID,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", rec.status,
+		"bytes", rec.bytes,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+}
+
+// withSecurityHeaders sets the headers that cost nothing and remove whole
+// classes of client-side trickery. Deliberately minimal: this is a JSON API,
+// so a strict CSP can be maximal.
+func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cache-Control", "no-store, max-age=0")
+		h.Set("Pragma", "no-cache")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Content-Security-Policy",
+			"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		h.Set("Permissions-Policy",
+			"geolocation=(), camera=(), microphone=(), interest-cohort=()")
+		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		h.Set("Server", "relay")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withBodyLimit caps every request body before any handler sees it.
+func (s *Server) withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
+		}
+		if ct := r.Header.Get("Content-Type"); r.Method == http.MethodPost {
+			if !strings.HasPrefix(strings.ToLower(ct), "application/json") {
+				writeError(w, apierr.BadRequest("Content-Type must be application/json"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withTimeout bounds handler work. Requests that overrun are cancelled rather
+// than left to hold a connection open.
+func (s *Server) withTimeout(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 type statusRecorder struct {
@@ -186,5 +240,5 @@ func constantTimeEqual(a, b string) bool {
 	return diff == 0
 }
 
-// Shutdown is a no-op placeholder kept so callers have one lifecycle hook.
-func (s *Server) Shutdown(context.Context) error { return nil }
+// MetricsToken returns the configured metrics token, for the handler.
+func (s *Server) metricsToken() string { return s.metrics }

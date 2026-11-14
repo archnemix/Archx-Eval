@@ -19,6 +19,7 @@ import (
 	"github.com/archnemix/archx-eval/relay/internal/config"
 	"github.com/archnemix/archx-eval/relay/internal/core"
 	"github.com/archnemix/archx-eval/relay/internal/httpapi"
+	"github.com/archnemix/archx-eval/relay/internal/ratelog"
 	"github.com/archnemix/archx-eval/relay/internal/reputation"
 	"github.com/archnemix/archx-eval/relay/internal/store"
 )
@@ -79,7 +80,21 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 		log.Info("reputation table loaded", "ranges", rep.Size())
 	}
 
-	svc := core.New(cfg, st, bm, rep)
+	// The rate log retention must exceed the longest window we evaluate, with
+	// headroom, or a restart would silently forget evidence of a flood.
+	retention := cfg.SpamBan
+	if cfg.GlobalWindow > retention {
+		retention = cfg.GlobalWindow
+	}
+	retention *= 2
+	rates, err := ratelog.Open(cfg.RateDir, retention)
+	if err != nil {
+		return err
+	}
+	defer rates.Close()
+
+	svc := core.New(cfg, st, bm, rep, rates)
+	log.Info("rate log ready", "keys", rates.Keys(), "retention", retention.String())
 
 	if doSync {
 		return syncToDataset(cfg, svc, log, dryRun)
@@ -123,6 +138,9 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 	if err := svc.Flush(); err != nil {
 		log.Error("flush failed", "err", err)
 	}
+	if err := svc.FlushRates(); err != nil {
+		log.Error("rate flush failed", "err", err)
+	}
 	return nil
 }
 
@@ -130,8 +148,10 @@ func housekeep(ctx context.Context, svc *core.Service, cfg config.Config, log *s
 	pruneEvery := 6 * time.Hour
 	pruneTicker := time.NewTicker(pruneEvery)
 	flushTicker := time.NewTicker(cfg.FlushInterval)
+	rateTicker := time.NewTicker(10 * time.Minute)
 	defer pruneTicker.Stop()
 	defer flushTicker.Stop()
+	defer rateTicker.Stop()
 
 	const rawTTL = 30 * 24 * time.Hour
 	for {
@@ -150,6 +170,15 @@ func housekeep(ctx context.Context, svc *core.Service, cfg config.Config, log *s
 		case <-flushTicker.C:
 			if err := svc.Flush(); err != nil {
 				log.Error("flush failed", "err", err)
+			}
+		case <-rateTicker.C:
+			n, err := svc.Maintain(time.Now().UTC())
+			if err != nil {
+				log.Error("rate log maintenance failed", "err", err)
+				continue
+			}
+			if n > 0 {
+				log.Info("rate log compacted", "files", n)
 			}
 		}
 	}
