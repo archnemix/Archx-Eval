@@ -1,0 +1,34 @@
+== health ==
+{
+  "ok": true,
+  "version": "dev",
+  "uptime_s": 0,
+  "bank": {
+    "_total": 14,
+    "logic": 6,
+    "python": 8
+  },
+  "inventory": {
+    "total": 14,
+    "by_category": {
+      "logic": 6,
+      "python": 8
+    },
+    "stale": 0,
+    "usable": 14
+  },
+  "records": 0,
+  "markers": 0,
+  "reputation_ranges": 0,
+  "salt_is_default": false
+}
+== draw ==
+{
+  "count": 3,
+  "by_category": {
+    "python": 3
+  },
+  "shortfall": 0
+}
+== second draw (expect 429) ==
+status=429

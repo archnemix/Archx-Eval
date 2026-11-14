@@ -1,0 +1,8 @@
+job: collect
+run: 43588025258
+commit: 02cab7376654fc9ab6476b549e61773cb7f06ac2
+branch: arena/a1d3d685-archx-eval
+finished: 2026-11-14T11:02:55Z
+test: success
+smoke: success
+image: success

@@ -1,0 +1,8 @@
+addr=:7860
+bank_dir=bank
+data_dir=data
+draw_max=75
+window=1h0m0s
+stale_after=3
+hf_enabled=false
+salt_default=true
