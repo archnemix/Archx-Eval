@@ -1,3 +1,3 @@
-binary_sha256: a25ad69a71ce156050e9764eea23f6269e48cac68ca926c9bda299b348ca8e18
-binary_bytes:  5890200
+binary_sha256: bf103d69618dbf7ebcc47840fc75dab05bd443703f7072a0a9f549ff86403302
+binary_bytes:  5935364
 go_version:    go:      go version go1.22.12 linux/amd64

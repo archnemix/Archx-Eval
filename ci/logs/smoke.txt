@@ -1,0 +1,28 @@
+== building ==
+== starting relay on :18080 ==
+  PASS  health reachable                           200
+  PASS  categories listed                          true
+  PASS  first draw granted                         200
+  PASS  draw returns 5 examples                    5
+  PASS  no answer material leaked                  false
+  PASS  second draw refused                        429
+  PASS  retry-after advertised                     true
+  PASS  ip rotation alone still blocked            429
+  PASS  feedback accepted                          200
+
+== store layout ==
+events/2026-11-14.jsonl
+identities/3c/0c5c8db9d23bb357c4cf2964d674eef3.json
+index.json
+markers/68/32c6e788faa2d9e1b50d94c113348f91.json
+markers/b8/8e0f43913d116c705661860f982d300b.json
+markers/ff/543e6af3a2e733816e326971b57cd8e6.json
+raw/3c/0c5c8db9d23bb357c4cf2964d674eef3.json
+results/2026-11-14.jsonl
+
+== events (first 3) ==
+{"ts":"2026-11-14T11:05:19.121781689Z","request_id":"","identity_id":"0c5c8db9d23bb357c4cf2964d674eef3","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
+{"ts":"2026-11-14T11:05:19.142298129Z","request_id":"","identity_id":"0c5c8db9d23bb357c4cf2964d674eef3","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
+{"ts":"2026-11-14T11:05:19.151753063Z","request_id":"","identity_id":"0c5c8db9d23bb357c4cf2964d674eef3","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
+
+result: 9 passed, 0 failed
