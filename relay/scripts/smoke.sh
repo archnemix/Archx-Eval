@@ -34,7 +34,7 @@ start_relay() {
   ADDR=":$PORT" \
   DATA_DIR="$WORK/store" \
   RATE_DIR="$WORK/rate" \
-  BANK_DIR="$ROOT/testdata/bank" \
+  BANK_DIR="$WORK/bank" \
   RELAY_SALT="smoke-test-salt" \
   ACCESS_TOKEN="smoke-token" \
   ADMIN_TOKEN="smoke-admin" \
@@ -80,6 +80,11 @@ status() { # status <curl args...>
 
 echo "== build =="
 (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$WORK/relayd" ./cmd/relayd)
+
+# Work on a copy: the bank is read-only fixture data and must never be mutated
+# by a test run (a stale usage.json there silently breaks every later run).
+cp -r "$ROOT/testdata/bank" "$WORK/bank"
+rm -f "$WORK/bank/usage.json"
 
 echo "== start =="
 start_relay
