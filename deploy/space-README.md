@@ -41,7 +41,7 @@ Set these in **Settings → Variables and secrets** for this Space:
 | `RELAY_SALT` | keys every marker hash. Set once, never change it. |
 | `ACCESS_TOKEN` | required on every draw |
 | `ADMIN_TOKEN` | gates the operational endpoints |
-| `HF_TOKEN` | write access to the private dataset |
+| `HF_TOKEN` | **must be a token belonging to the Space's own account** with read+write on the private dataset |
 | `METRICS_TOKEN` | optional; gates `/metrics` |
 
 Optional tuning: `WINDOW`, `DRAW_MAX`, `STALE_AFTER_USES`, `SPAM_COUNT`,

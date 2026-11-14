@@ -51,6 +51,18 @@ type Config struct {
 	HFBaseURL string
 	HFEnabled bool
 
+	// SyncInterval is the batching cadence for dataset commits. The dataset is
+	// a git repo: writes are sequential, so they are coalesced rather than
+	// issued per request.
+	SyncInterval time.Duration
+	SyncMaxFiles int
+	// RestoreOnBoot pulls the relay's own state back from the dataset before
+	// serving, so a sleeping Space resumes with its memory intact.
+	RestoreOnBoot bool
+	// RestorePrefixes lists the dataset subtrees the relay owns. The bank is
+	// deliberately excluded: the relay mounts or fetches it, never publishes it.
+	RestorePrefixes []string
+
 	// FlushInterval is the maximum time a rejection is allowed to sit in
 	// memory before being persisted. Accepted draws always flush inline.
 	// RateDir holds the durable sliding-window log. It lives outside DataDir's
@@ -107,6 +119,17 @@ func Load() Config {
 		HFToken:   os.Getenv("HF_TOKEN"),
 		HFBaseURL: envStr("HF_BASE_URL", "https://huggingface.co"),
 
+		SyncInterval:  envDur("SYNC_INTERVAL", 30*time.Second),
+		SyncMaxFiles:  envInt("SYNC_MAX_FILES", 100),
+		RestoreOnBoot: envBool("RESTORE_ON_BOOT", true),
+		// Note: "raw" is deliberately absent. Raw IPs and machine identifiers
+		// must never enter a git repository, because git history is permanent:
+		// a "deleted" file remains readable in the commit graph for ever, which
+		// would make the 30-day retention promise a lie. Raw rows stay on the
+		// Space's persistent volume and are pruned locally.
+		RestorePrefixes: envList("RESTORE_PREFIXES",
+			[]string{"identities", "markers", "events", "results"}),
+
 		RateDir:     envStr("RATE_DIR", "rate"),
 		AccessToken: os.Getenv("ACCESS_TOKEN"),
 
@@ -145,6 +168,23 @@ func (c Config) Salt() []byte {
 // SaltIsDefault reports whether the insecure development salt is in use.
 func (c Config) SaltIsDefault() bool {
 	return c.SaltSecret == "dev-insecure-salt-change-me"
+}
+
+func envList(key string, def []string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 func envStr(key, def string) string {

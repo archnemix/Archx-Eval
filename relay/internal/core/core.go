@@ -26,6 +26,7 @@ import (
 	"github.com/archnemix/archx-eval/relay/internal/ratelog"
 	"github.com/archnemix/archx-eval/relay/internal/reputation"
 	"github.com/archnemix/archx-eval/relay/internal/store"
+	"github.com/archnemix/archx-eval/relay/internal/syncctl"
 )
 
 // Service is the relay core.
@@ -36,6 +37,11 @@ type Service struct {
 	rep   *reputation.Table
 	pol   limits.Policy
 	salt  []byte
+
+	// sync queues state changes for the dataset. It is optional: when nil the
+	// relay runs in local-only mode. Even when present it never blocks a
+	// request, because Enqueue is an in-memory operation.
+	sync *syncctl.Controller
 
 	// rates is the durable sliding-window log behind the spam ladder and the
 	// network ceilings. It survives a process restart, which matters because
@@ -65,6 +71,21 @@ func New(cfg config.Config, st *store.Store, bm *bank.Manager, rep *reputation.T
 			BurstBan:    cfg.BurstBan,
 		},
 	}
+}
+
+// WithSync attaches the dataset write controller.
+func (s *Service) WithSync(c *syncctl.Controller) *Service {
+	s.sync = c
+	return s
+}
+
+// SyncStats reports controller health, or nil when sync is disabled.
+func (s *Service) SyncStats() *syncctl.Stats {
+	if s.sync == nil {
+		return nil
+	}
+	st := s.sync.Stats()
+	return &st
 }
 
 // SetClock overrides the clock (tests only).
@@ -270,6 +291,7 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 	}
 	s.recordRaw(rec.ID, id, now)
 	s.record(ctx, in.RequestID, rec.ID, "allow", "granted", id, 0)
+	s.publishIdentity(rec)
 
 	return &Grant{
 		RequestID:  in.RequestID,
@@ -338,6 +360,22 @@ func (s *Service) mergeMarkers(rec *store.Record, markers []string) {
 	}
 }
 
+// publishIdentity queues the hashed record for the dataset.
+//
+// The raw row is deliberately NOT queued. The dataset is a git repository, and
+// git history is permanent: a committed IP address stays recoverable in the
+// commit graph even after the file is deleted, so publishing raw identifiers
+// would make the retention promise impossible to keep. Raw rows stay on the
+// Space's persistent volume and are pruned locally after 30 days.
+func (s *Service) publishIdentity(rec *store.Record) {
+	if s.sync == nil || rec == nil {
+		return
+	}
+	if buf, err := store.MarshalRecord(rec); err == nil {
+		s.sync.Enqueue(store.RecordPath(rec.ID), buf)
+	}
+}
+
 func (s *Service) recordRaw(id string, ident *identity.Identity, now time.Time) {
 	raw := &store.RawIdentity{
 		ID:        id,
@@ -379,6 +417,12 @@ func (s *Service) record(ctx context.Context, reqID, id, decision, reason string
 	}
 	if err := s.store.AppendEvent(ev); err != nil {
 		fmt.Fprintf(os.Stderr, "warn: event not persisted: %v\n", err)
+		return
+	}
+	if s.sync != nil {
+		if buf, err := s.store.ReadEventDay(ev.TS); err == nil {
+			s.sync.Enqueue(store.EventPath(ev.TS), buf)
+		}
 	}
 }
 
@@ -464,6 +508,7 @@ type Health struct {
 	Markers       int            `json:"markers"`
 	Reputation    int            `json:"reputation_ranges"`
 	SaltIsDefault bool           `json:"salt_is_default"`
+	Sync          *syncctl.Stats `json:"sync,omitempty"`
 }
 
 var startedAt = time.Now()
@@ -484,6 +529,7 @@ func (s *Service) Health() Health {
 		Markers:       markers,
 		Reputation:    s.rep.Size(),
 		SaltIsDefault: s.cfg.SaltIsDefault(),
+		Sync:          s.SyncStats(),
 	}
 }
 
@@ -516,14 +562,23 @@ func (s *Service) Flush() error {
 // FlushRates fsyncs the durable rate log; called on shutdown.
 func (s *Service) FlushRates() error { return s.rates.Flush() }
 
-// ExportSnapshot copies the store tree into dir for the dataset mirror.
+// PublishableSubtrees is the single canonical list of store subtrees that may
+// be mirrored to the dataset. "raw" is absent on purpose: raw identity rows
+// must never enter a git repository, whose history is permanent.
+//
+// Both the live sync controller and the one-shot -sync export read this list,
+// so the two paths cannot drift apart (a real leak happened when they did).
+var PublishableSubtrees = []string{"identities", "markers", "events", "results"}
+
+// ExportSnapshot copies the publishable store tree into dir for the dataset
+// mirror.
 func (s *Service) ExportSnapshot(dir string) ([]string, error) {
 	if err := s.Flush(); err != nil {
 		return nil, err
 	}
 	src := s.cfg.DataDir
 	var written []string
-	for _, sub := range []string{"identities", "markers", "events", "raw"} {
+	for _, sub := range PublishableSubtrees {
 		from := filepath.Join(src, sub)
 		to := filepath.Join(dir, sub)
 		n, err := copyTree(from, to)
@@ -597,4 +652,13 @@ func (s *Service) SubmitResult(r store.Result) error {
 // record so existing bans still apply.
 func (s *Service) Erase(id string) (bool, error) {
 	return s.store.EraseRaw(id)
+}
+
+// SyncFlush publishes everything queued for the dataset. Used by -sync, by
+// shutdown, and by tests.
+func (s *Service) SyncFlush(ctx context.Context) error {
+	if s.sync == nil {
+		return nil
+	}
+	return s.sync.FlushNow(ctx)
 }

@@ -18,10 +18,12 @@ import (
 	"github.com/archnemix/archx-eval/relay/internal/bank"
 	"github.com/archnemix/archx-eval/relay/internal/config"
 	"github.com/archnemix/archx-eval/relay/internal/core"
+	"github.com/archnemix/archx-eval/relay/internal/hf"
 	"github.com/archnemix/archx-eval/relay/internal/httpapi"
 	"github.com/archnemix/archx-eval/relay/internal/ratelog"
 	"github.com/archnemix/archx-eval/relay/internal/reputation"
 	"github.com/archnemix/archx-eval/relay/internal/store"
+	"github.com/archnemix/archx-eval/relay/internal/syncctl"
 )
 
 func main() {
@@ -59,6 +61,14 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 		log.Warn("HF_TOKEN is unset: dataset publishing is disabled")
 	}
 
+	// Pull our own state back from the dataset before opening the store, so the
+	// process resumes with its memory of known callers intact.
+	bootCtx, bootCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	if err := restoreState(bootCtx, cfg, log); err != nil {
+		log.Error("restore failed; continuing with local state", "err", err)
+	}
+	bootCancel()
+
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		return err
@@ -95,6 +105,28 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 
 	svc := core.New(cfg, st, bm, rep, rates)
 	log.Info("rate log ready", "keys", rates.Keys(), "retention", retention.String())
+
+	// The dataset is a git repo: writes are sequential, so every state change
+	// goes through one batching controller instead of being committed per
+	// request. Enqueue never blocks a request.
+	var controller *syncctl.Controller
+	if cfg.HFEnabled {
+		remote := newRemote(cfg)
+		controller = syncctl.New(syncctl.Config{
+			Interval:  cfg.SyncInterval,
+			MaxFiles:  cfg.SyncMaxFiles,
+			MaxQueued: 20000,
+		}, remote, log)
+		svc.WithSync(controller)
+		syncCtx, syncCancel := context.WithCancel(context.Background())
+		defer syncCancel()
+		go controller.Run(syncCtx)
+		defer controller.Stop()
+		log.Info("dataset sync enabled", "interval", cfg.SyncInterval.String())
+	} else {
+		log.Warn("HF_TOKEN is unset: state stays local and is never published")
+	}
+	var _ hf.Remote
 
 	if doSync {
 		return syncToDataset(cfg, svc, log, dryRun)

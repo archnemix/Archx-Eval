@@ -175,6 +175,16 @@ warns loudly when it falls back to the development salt.
 
 ## Publishing state to the dataset
 
+The dataset is a **git repository**, so writes are sequential. Every state
+change goes through `internal/syncctl`, a single-writer controller that
+coalesces changes into batches, keeps exactly one commit in flight, skips
+files whose git blob hash is unchanged, and backs off when the remote pushes
+back. Queueing is in-memory and bounded, so a slow or broken dataset can never
+stall a draw.
+
+Raw identity rows are **never** published: git history is permanent, so a
+committed IP could not be deleted after the 30-day retention window.
+
 ```bash
 ./relayd -sync            # export the store tree and push to the private dataset
 ./relayd -sync -dry-run   # write to SYNC_MIRROR_DIR instead (used by CI)

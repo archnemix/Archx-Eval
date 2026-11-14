@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -491,3 +492,65 @@ func ValidShard(name string) bool {
 // ShardOf exposes the shard directory name for a key, so callers (and tests)
 // never have to reimplement the layout.
 func ShardOf(key string) string { return shard(key) }
+
+// --- dataset mirror helpers -------------------------------------------------
+//
+// These expose the canonical on-disk path and serialised form for each artefact
+// so the sync controller publishes byte-identical content to what the store
+// writes locally. Two code paths producing two formats would be a silent
+// source of dataset drift.
+
+// RecordPath is the dataset path for a hashed identity record.
+func RecordPath(id string) string { return path.Join("identities", shard(id), id+".json") }
+
+// RawPath is the dataset path for a sensitive identity row.
+func RawPath(id string) string { return path.Join("raw", shard(id), id+".json") }
+
+// EventPath is the dataset path for one day of the event log.
+func EventPath(at time.Time) string {
+	return path.Join("events", at.UTC().Format("2006-01-02")+".jsonl")
+}
+
+// ResultPath is the dataset path for one day of benchmark results.
+func ResultPath(at time.Time) string {
+	return path.Join("results", at.UTC().Format("2006-01-02")+".jsonl")
+}
+
+// MarshalRecord serialises a record exactly as it is stored.
+func MarshalRecord(rec *Record) ([]byte, error) {
+	buf, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(buf, '\n'), nil
+}
+
+// MarshalRaw serialises a raw identity row exactly as it is stored.
+func MarshalRaw(raw *RawIdentity) ([]byte, error) {
+	buf, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(buf, '\n'), nil
+}
+
+// ReadEventDay returns the whole event log for a day, for publication as one
+// file. A day is a natural batching unit: it is append-mostly and small.
+func (s *Store) ReadEventDay(at time.Time) ([]byte, error) {
+	p := filepath.Join(s.dir, "events", at.UTC().Format("2006-01-02")+".jsonl")
+	buf, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return []byte{}, nil
+	}
+	return buf, err
+}
+
+// ReadResultDay returns the whole result log for a day.
+func (s *Store) ReadResultDay(at time.Time) ([]byte, error) {
+	p := filepath.Join(s.dir, "results", at.UTC().Format("2006-01-02")+".jsonl")
+	buf, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return []byte{}, nil
+	}
+	return buf, err
+}
