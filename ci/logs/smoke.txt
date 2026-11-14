@@ -1,28 +1,56 @@
-== building ==
-== starting relay on :18080 ==
-  PASS  health reachable                           200
-  PASS  categories listed                          true
-  PASS  first draw granted                         200
-  PASS  draw returns 5 examples                    5
-  PASS  no answer material leaked                  false
-  PASS  second draw refused                        429
-  PASS  retry-after advertised                     true
-  PASS  ip rotation alone still blocked            429
-  PASS  feedback accepted                          200
+== build ==
+== start ==
 
-== store layout ==
-events/2026-11-14.jsonl
-identities/3c/0c5c8db9d23bb357c4cf2964d674eef3.json
-index.json
-markers/68/32c6e788faa2d9e1b50d94c113348f91.json
-markers/b8/8e0f43913d116c705661860f982d300b.json
-markers/ff/543e6af3a2e733816e326971b57cd8e6.json
-raw/3c/0c5c8db9d23bb357c4cf2964d674eef3.json
-results/2026-11-14.jsonl
+== authentication ==
+  PASS  health is public                               200
+  PASS  draw without token refused                     403
+  PASS  draw with wrong token refused                  403
+  PASS  metrics without token refused                  403
 
-== events (first 3) ==
-{"ts":"2026-11-14T11:05:19.121781689Z","request_id":"","identity_id":"0c5c8db9d23bb357c4cf2964d674eef3","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
-{"ts":"2026-11-14T11:05:19.142298129Z","request_id":"","identity_id":"0c5c8db9d23bb357c4cf2964d674eef3","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
-{"ts":"2026-11-14T11:05:19.151753063Z","request_id":"","identity_id":"0c5c8db9d23bb357c4cf2964d674eef3","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
+== transport hardening ==
+  PASS  header X-Content-Type-Options                  1
+  PASS  header X-Frame-Options                         1
+  PASS  header Referrer-Policy                         1
+  PASS  header Cross-Origin-Resource-Policy            1
+  PASS  csp present                                    1
+  PASS  hsts present                                   1
+  PASS  wrong content-type rejected                    400
 
-result: 9 passed, 0 failed
+== happy path ==
+  PASS  first draw granted                             5
+  PASS  no answer material leaked                      false
+
+== window enforcement ==
+  PASS  second draw refused                            429
+  PASS  retry-after advertised                         3600
+  PASS  ip rotation alone still blocked                429
+
+== restart persistence (the Space-sleep hole) ==
+  PASS  window survives restart                        429
+
+== spam ladder + ban persistence ==
+  PASS  spamming is throttled                          true
+  PASS  ban survives restart                           429
+
+== metrics ==
+  PASS  metrics gated endpoint works                   true
+  PASS  metrics exposes usable stock                   true
+
+== on-disk layout ==
+rate/34/net:cfb67c1d9c187c445030dea82f2f99f0.jsonl
+rate/80/global.jsonl
+rate/82/id:32c6e788faa2d9e1b50d94c113348f91.jsonl
+store/events/2026-11-14.jsonl
+store/identities/41/245ed6c6fdf6908896921dfcf9707461.json
+store/index.json
+store/markers/68/32c6e788faa2d9e1b50d94c113348f91.json
+store/markers/7b/c25d0bf389b7ddbae2216a76b6345f74.json
+store/markers/b8/8e0f43913d116c705661860f982d300b.json
+store/markers/ff/543e6af3a2e733816e326971b57cd8e6.json
+store/raw/41/245ed6c6fdf6908896921dfcf9707461.json
+
+== event log sample ==
+{"ts":"2026-11-14T14:58:25.349057683Z","request_id":"","identity_id":"245ed6c6fdf6908896921dfcf9707461","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
+{"ts":"2026-11-14T14:58:25.366599916Z","request_id":"","identity_id":"245ed6c6fdf6908896921dfcf9707461","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
+
+result: 21 passed, 0 failed
