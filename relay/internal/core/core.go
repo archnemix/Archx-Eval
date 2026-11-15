@@ -245,7 +245,6 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 			if err := s.store.Put(rec); err != nil {
 				return nil, apierr.Internal("could not update identity")
 			}
-			s.recordRaw(rec.ID, id, now)
 		}
 		s.record(ctx, in.RequestID, idOf(rec), "deny", d.Code, id, int(d.RetryAfter.Seconds()))
 		return nil, limits.Refuse(d)
@@ -289,7 +288,6 @@ func (s *Service) RequestDraw(ctx context.Context, in DrawInput) (*Grant, error)
 		// the in-memory counter already prevents double-issue this process.
 		fmt.Fprintf(os.Stderr, "warn: usage save failed: %v\n", err)
 	}
-	s.recordRaw(rec.ID, id, now)
 	s.record(ctx, in.RequestID, rec.ID, "allow", "granted", id, 0)
 	s.publishIdentity(rec)
 
@@ -373,28 +371,6 @@ func (s *Service) publishIdentity(rec *store.Record) {
 	}
 	if buf, err := store.MarshalRecord(rec); err == nil {
 		s.sync.Enqueue(store.RecordPath(rec.ID), buf)
-	}
-}
-
-func (s *Service) recordRaw(id string, ident *identity.Identity, now time.Time) {
-	raw := &store.RawIdentity{
-		ID:        id,
-		IP:        ident.IP.String(),
-		IPVersion: "v4",
-		Network:   ident.Network.String(),
-		MachineID: ident.RawMarks.MachineID,
-		DiskUUID:  ident.RawMarks.DiskUUID,
-		FirstSeen: now,
-		LastSeen:  now,
-	}
-	if ident.IP.Is6() {
-		raw.IPVersion = "v6"
-	}
-	if prev, ok := s.store.Raw(id); ok {
-		raw.FirstSeen = prev.FirstSeen
-	}
-	if err := s.store.PutRaw(raw); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: raw identity not persisted: %v\n", err)
 	}
 }
 
@@ -518,7 +494,7 @@ var Version = "dev"
 
 // Health reports service state without touching the bank lists.
 func (s *Service) Health() Health {
-	recs, markers, _ := s.store.Stats()
+	recs, markers := s.store.Stats()
 	return Health{
 		OK:            s.bank.Size() > 0,
 		Version:       Version,
@@ -539,8 +515,9 @@ func (s *Service) Categories() []string { return s.bank.Categories() }
 // StaleExamples exposes the stale list for the daily curator job.
 func (s *Service) StaleExamples() []bank.Example { return s.bank.Stale() }
 
-// Prune expires raw identity rows.
-func (s *Service) Prune(ttl time.Duration) (int, error) { return s.store.Prune(s.now(), ttl) }
+// Prune clears expired bans. No personal data is stored, so there is nothing
+// to expire; the retention obligation disappears with the raw values.
+func (s *Service) Prune() (int, error) { return s.store.Prune(s.now()) }
 
 // Maintain compacts and fsyncs the durable rate log. Called on a timer.
 func (s *Service) Maintain(now time.Time) (int, error) {
@@ -648,10 +625,12 @@ func (s *Service) SubmitResult(r store.Result) error {
 	return s.store.AppendResult(r)
 }
 
-// Erase deletes the sensitive row for an identity while keeping the hashed
-// record so existing bans still apply.
+// Erase reports whether an identity is known. There is no personal data to
+// delete: only hashes are stored, so the endpoint is retained for compatibility
+// and answers "nothing to erase" rather than pretending to remove something.
 func (s *Service) Erase(id string) (bool, error) {
-	return s.store.EraseRaw(id)
+	_, known := s.store.Get(id)
+	return known, nil
 }
 
 // SyncFlush publishes everything queued for the dataset. Used by -sync, by

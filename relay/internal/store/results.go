@@ -72,20 +72,3 @@ func (s *Store) AppendResult(r Result) error {
 	_, err = f.Write(append(line, '\n'))
 	return err
 }
-
-// EraseRaw deletes the sensitive row for an identity id. The hashed record is
-// kept so that bans still hold.
-func (s *Store) EraseRaw(id string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.raw[id]
-	if !ok {
-		return false, nil
-	}
-	path := filepath.Join(s.dir, "raw", shard(id), id+".json")
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
-	delete(s.raw, id)
-	return true, nil
-}

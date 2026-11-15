@@ -55,7 +55,7 @@ func TestPutAndLookupByAnyMarker(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 deduplicated match, got %d", len(got))
 	}
-	if n, _, _ := s.Stats(); n != 1 {
+	if n, _ := s.Stats(); n != 1 {
 		t.Fatalf("expected 1 record, got %d", n)
 	}
 }
@@ -82,10 +82,6 @@ func TestPersistenceSurvivesReopen(t *testing.T) {
 	if err := s.Put(&Record{ID: "id-9", Markers: []string{"m-z"}, FirstSeen: now, LastSeen: now}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if err := s.PutRaw(&RawIdentity{ID: "id-9", IP: "203.0.113.5", MachineID: "mach"}); err != nil {
-		t.Fatalf("put raw: %v", err)
-	}
-
 	if _, err := os.Stat(filepath.Join(dir, "identities", shard("id-9"), "id-9.json")); err != nil {
 		t.Fatalf("identity file missing: %v", err)
 	}
@@ -119,32 +115,43 @@ func TestAppendEventWritesJSONL(t *testing.T) {
 	}
 }
 
-func TestPruneExpiresRawOnly(t *testing.T) {
+// There is no personal data to expire: retention is satisfied by never storing
+// raw values in the first place.
+func TestPruneOnlyClearsExpiredBans(t *testing.T) {
 	s, _ := newStore(t)
 	now := time.Now().UTC()
-	old := now.Add(-40 * 24 * time.Hour)
-	if err := s.PutRaw(&RawIdentity{ID: "old", IP: "203.0.113.1", LastSeen: old}); err != nil {
-		t.Fatalf("put raw: %v", err)
+	expired := &Record{
+		ID: "id-1", Markers: []string{"h1"},
+		FirstSeen: now.Add(-48 * time.Hour), LastSeen: now,
+		BannedUntil: now.Add(-time.Hour), BanReason: "SPAM_BURST",
 	}
-	if err := s.PutRaw(&RawIdentity{ID: "new", IP: "203.0.113.2", LastSeen: now}); err != nil {
-		t.Fatalf("put raw: %v", err)
+	active := &Record{
+		ID: "id-2", Markers: []string{"h2"},
+		FirstSeen: now, LastSeen: now,
+		BannedUntil: now.Add(time.Hour), BanReason: "SPAM_BURST",
 	}
-	if err := s.Put(&Record{ID: "old", Markers: []string{"h1"}, FirstSeen: old, LastSeen: old}); err != nil {
-		t.Fatalf("put: %v", err)
+	for _, rec := range []*Record{expired, active} {
+		if err := s.Put(rec); err != nil {
+			t.Fatalf("put: %v", err)
+		}
 	}
 
-	removed, err := s.Prune(now, 30*24*time.Hour)
+	cleared, err := s.Prune(now)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("expected 1 raw row removed, got %d", removed)
+	if cleared != 1 {
+		t.Fatalf("expected 1 expired ban cleared, got %d", cleared)
 	}
-	if _, ok := s.Raw("old"); ok {
-		t.Fatal("expired raw row should be gone")
+	if got, _ := s.Get("id-1"); !got.BannedUntil.IsZero() {
+		t.Fatal("expired ban should be cleared")
 	}
-	if _, ok := s.Get("old"); !ok {
-		t.Fatal("hashed record must outlive the raw row")
+	if got, _ := s.Get("id-2"); got.BannedUntil.IsZero() {
+		t.Fatal("active ban must be preserved")
+	}
+	// Hashed records always survive: they are the memory of the system.
+	if _, ok := s.Get("id-1"); !ok {
+		t.Fatal("record must survive")
 	}
 }
 

@@ -82,7 +82,9 @@ or `403 PRIVACY_BLOCKED` for masked traffic.
 
 ## Identity model
 
-Three markers, all hashed with a salted HMAC-SHA256 truncated to 128 bits:
+Raw values are **never stored**. Three markers are derived, each hashed with a
+salted HMAC-SHA256 truncated to 128 bits, and the originals are discarded
+immediately:
 
 | Marker | Source | Changed by |
 |---|---|---|
@@ -98,6 +100,22 @@ the window.
 socket address always wins when no proxy is configured. Trusting the full chain
 is the classic rate-limit bypass.
 
+There is no `raw/` subtree and no raw-value file of any kind. A stored record
+looks like this:
+
+```json
+{
+  "id": "b3181136b958bbfa08e0e8a5dd93ad57",
+  "markers": ["31fff368...", "aa1e58e2...", "3df609f7..."],
+  "requests": 2,
+  "draws": 1,
+  "last_draw": "2026-11-15T16:08:07Z"
+}
+```
+
+Consequently `POST /v1/erase` has nothing to delete and says so explicitly,
+rather than pretending to comply.
+
 ## Policy defaults
 
 | Setting | Default | Meaning |
@@ -111,8 +129,8 @@ is the classic rate-limit bypass.
 | `SPAM_BAN` | `48h` | sustained penalty |
 | `NET_MAX_DRAWS` / `NET_WINDOW` | `60` / `1h` | per-subnet ceiling |
 | `GLOBAL_MAX_DRAWS` / `GLOBAL_WINDOW` | `4000` / `1h` | service-wide ceiling |
-| raw row TTL | `720h` (30 days) | then `raw/` is pruned; hashed records persist |
 | ban escalation | `×2, ×3 …` capped at 14 days | repeat offenders |
+| personal-data retention | **none needed** | raw values are never stored |
 
 ## Persistence
 
@@ -121,7 +139,7 @@ restart silently forgives every limit:
 
 | Directory | Contents | Survives restart |
 |---|---|---|
-| `DATA_DIR` | hashed identities, marker index, raw rows, event log, results | yes, reloaded on boot |
+| `DATA_DIR` | hashed identities, marker index, event log, results | yes, loaded on boot |
 | `RATE_DIR` | durable sliding-window request log | yes, replayed on boot |
 
 `RATE_DIR` is deliberately **outside** `DATA_DIR` so it never ends up in the

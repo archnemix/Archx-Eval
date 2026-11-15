@@ -46,13 +46,6 @@ type Device struct {
 	ClockSkewS  float64 `json:"clock_skew_s"`
 }
 
-// Raw marks, pre-hash. Held only in memory, never persisted.
-type Raw struct {
-	IP        netip.Addr
-	MachineID string
-	DiskUUID  string
-}
-
 // Identity is one evaluated caller.
 type Identity struct {
 	IP      netip.Addr
@@ -62,8 +55,10 @@ type Identity struct {
 	// ASNOrg is the edge-provided network operator, if any.
 	ASNOrg string
 
-	Markers  []Marker // hashed, ordered ip -> machine_id -> disk_uuid
-	RawMarks Raw      // in memory only
+	// Markers are salted hashes, ordered ip -> machine_id -> disk_uuid.
+	// The raw values they came from are not retained anywhere: they are
+	// arguments to the hashing function and are discarded with the frame.
+	Markers []Marker
 
 	Device        Device
 	Privacy       Privacy
@@ -133,8 +128,6 @@ func FromRequest(remote netip.Addr, headers map[string][]string, dev Device, has
 		ForwardedHops: hops,
 		UserAgent:     firstHeader(headers, "User-Agent"),
 	}
-	id.RawMarks = Raw{IP: ip, MachineID: machineID, DiskUUID: diskUUID}
-
 	// Order matters: IP is the cheapest and most reliable marker, so it leads.
 	id.Markers = []Marker{
 		{Type: MarkerIP, Hash: hash(MarkerIP, ip.String())},

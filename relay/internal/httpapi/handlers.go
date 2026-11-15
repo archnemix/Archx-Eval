@@ -305,12 +305,19 @@ func (s *Server) handleErase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apierr.BadRequest("identity_id is required"))
 		return
 	}
-	removed, err := s.svc.Erase(body.IdentityID)
+	known, err := s.svc.Erase(body.IdentityID)
 	if err != nil {
 		writeError(w, apierr.Internal("erase failed"))
 		return
 	}
-	writeJSON(w, 200, map[string]any{"erased": removed})
+	// There is no personal data to delete: only salted hashes are stored, and a
+	// hash is not personal data. The endpoint stays so a compliance request has
+	// an honest, documented answer instead of a 404.
+	writeJSON(w, 200, map[string]any{
+		"identity_known": known,
+		"erased":         false,
+		"detail":         "no raw personal data is stored: identities are kept as salted hashes only",
+	})
 }
 
 func (s *Server) logDeny(reqID string, err error) {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,6 +202,71 @@ func TestErrorResponsesDoNotLeakInternals(t *testing.T) {
 		if strings.Contains(body, bad) {
 			t.Fatalf("error response leaked %q: %s", bad, rec.Body)
 		}
+	}
+}
+
+// --- privacy --------------------------------------------------------------
+
+// The HTTP layer must never log or echo a raw client address. Behind a proxy
+// the socket address is the proxy's, which is harmless, but with
+// TRUSTED_PROXY_HOPS=0 it is the caller's real address.
+func TestAccessLogContainsNoRawAddress(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	srv, _ := newServerWith(t, 20, true)
+	srv.log = log
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/draw", bytes.NewBufferString(drawBody))
+	req.RemoteAddr = "198.51.100.7:5555"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-access-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	out := buf.String()
+	if out == "" {
+		t.Fatal("expected the request to be logged")
+	}
+	if strings.Contains(out, "198.51.100.7") {
+		t.Fatalf("access log leaked a client address: %s", out)
+	}
+}
+
+func TestEraseReportsNoPersonalData(t *testing.T) {
+	srv, _ := newServer(t, 10)
+	rec := post(t, srv, "/v1/draw", drawBody)
+	var out struct {
+		IdentityID string `json:"identity_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"identity_id":"` + out.IdentityID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/erase", bytes.NewBufferString(body))
+	req.RemoteAddr = "203.0.113.10:5555"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer admin-token")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp struct {
+		Known  bool   `json:"identity_known"`
+		Erased bool   `json:"erased"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Known || resp.Erased {
+		t.Fatalf("unexpected erase response: %+v", resp)
+	}
+	if !strings.Contains(resp.Detail, "salted hashes") {
+		t.Fatalf("detail should explain why nothing was erased: %q", resp.Detail)
 	}
 }
 

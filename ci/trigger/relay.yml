@@ -1,2 +1,2 @@
 # Relay CI trigger — edit this file to start a run.
-# run: 6 (sync controller + restore)
+# run: 7 (raw identity storage removed entirely)

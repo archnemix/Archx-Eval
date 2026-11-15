@@ -306,12 +306,21 @@ func TestRespectsProxyHeadersForDifferentiation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("draw: %v", err)
 	}
-	raw, ok := h.store.Raw(g.IdentityID)
+	// The record must be keyed on the socket address, not the forwarded header
+	// (which the client controls), and it must contain no raw value at all.
+	rec, ok := h.store.Get(g.IdentityID)
 	if !ok {
-		t.Fatal("expected a raw identity row")
+		t.Fatal("expected a record")
 	}
-	if raw.IP != "198.51.100.7" {
-		t.Fatalf("expected the socket address, got %s", raw.IP)
+	wantIP := h.svc.Hash(identity.MarkerIP, "198.51.100.7")
+	found := false
+	for _, m := range rec.Markers {
+		if m == wantIP {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("record is not keyed on the socket address; markers=%v", rec.Markers)
 	}
 }
 
@@ -367,21 +376,43 @@ func TestEventsRecorded(t *testing.T) {
 	}
 }
 
-func TestRawNeverStoredInHashedTree(t *testing.T) {
+// The strongest privacy guarantee the system can make: after a full request
+// cycle, not one byte on disk contains the IP or the device identifiers.
+func TestNoRawIdentityAnywhereOnDisk(t *testing.T) {
 	h := newHarness(t, 50)
 	g, err := h.svc.RequestDraw(context.Background(), input("203.0.113.10", machA, diskA))
 	if err != nil {
 		t.Fatal(err)
 	}
-	hashed, err := os.ReadFile(filepath.Join(h.cfg.DataDir, "identities", g.IdentityID[:0]+shardOf(g.IdentityID), g.IdentityID+".json"))
-	if err != nil {
-		t.Fatalf("read record: %v", err)
+	if err := h.svc.Flush(); err != nil {
+		t.Fatal(err)
 	}
-	// The hashed record must not leak any raw personal value.
-	for _, secret := range []string{"203.0.113.10", machA, diskA} {
-		if strings.Contains(string(hashed), secret) {
-			t.Fatalf("hashed record leaked %q", secret)
+
+	secrets := []string{"203.0.113.10", machA, diskA, machA[:8], diskA[:8]}
+	err = filepath.WalkDir(h.cfg.DataDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
 		}
+		buf, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for _, secret := range secrets {
+			if strings.Contains(string(buf), secret) {
+				t.Errorf("%s contains raw identity value %q", path, secret)
+			}
+		}
+		// Also assert the shard tree has no raw subtree at all.
+		if strings.Contains(filepath.ToSlash(path), "/raw/") {
+			t.Errorf("unexpected raw subtree entry: %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if _, ok := h.store.Get(g.IdentityID); !ok {
+		t.Fatal("the hashed record should still exist")
 	}
 }
 
@@ -396,25 +427,32 @@ func TestHealthReportsBank(t *testing.T) {
 	}
 }
 
-func TestPruneRemovesOldRaw(t *testing.T) {
+func TestPruneClearsBansButKeepsMemory(t *testing.T) {
 	h := newHarness(t, 50)
 	g, err := h.svc.RequestDraw(context.Background(), input("203.0.113.10", machA, diskA))
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.advance(40 * 24 * time.Hour)
-	removed, err := h.svc.Prune(30 * 24 * time.Hour)
+	rec, _ := h.store.Get(g.IdentityID)
+	rec.BannedUntil = h.now.Add(-time.Minute)
+	rec.BanReason = "SPAM_BURST"
+	if err := h.store.Put(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	cleared, err := h.svc.Prune()
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("expected 1 raw row pruned, got %d", removed)
+	if cleared != 1 {
+		t.Fatalf("expected 1 ban cleared, got %d", cleared)
 	}
-	if _, ok := h.store.Raw(g.IdentityID); ok {
-		t.Fatal("raw row should be gone")
+	after, ok := h.store.Get(g.IdentityID)
+	if !ok {
+		t.Fatal("hashed record must survive pruning")
 	}
-	if _, ok := h.store.Get(g.IdentityID); !ok {
-		t.Fatal("hashed record must survive")
+	if !after.BannedUntil.IsZero() {
+		t.Fatal("expired ban should be cleared")
 	}
 }
 

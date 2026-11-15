@@ -32,12 +32,17 @@ runner is built against a contract that already exists.
 
 ## Privacy posture
 
-Only three values act as personal markers — IP address, machine identifier and
-disk identifier — and only because they are the values a user cannot rotate
-without real effort. No MAC address, no browser fingerprinting, no
-cross-service identifiers, no analytics. Raw values live in the private dataset
-and expire after 30 days; the public side of this repository only ever receives
-salted hashes, counts and aggregates.
+Three values act as identity markers — IP address, machine identifier and disk
+identifier — and only because they are the values a user cannot rotate without
+real effort. No MAC address, no browser fingerprinting, no cross-service
+identifiers, no analytics.
+
+**The raw values are never stored.** They are hashed with a salted HMAC-SHA256
+the moment they arrive and discarded. What persists everywhere — disk, dataset,
+dataset git history, logs — is 128 bits of hash and nothing else. A full leak of
+any of those therefore discloses no personal data, and there is no retention
+window to police or deletion to honour. Verified by tests that sweep every file
+the service writes.
 
 ## CI
 

@@ -122,11 +122,8 @@ func Load() Config {
 		SyncInterval:  envDur("SYNC_INTERVAL", 30*time.Second),
 		SyncMaxFiles:  envInt("SYNC_MAX_FILES", 100),
 		RestoreOnBoot: envBool("RESTORE_ON_BOOT", true),
-		// Note: "raw" is deliberately absent. Raw IPs and machine identifiers
-		// must never enter a git repository, because git history is permanent:
-		// a "deleted" file remains readable in the commit graph for ever, which
-		// would make the 30-day retention promise a lie. Raw rows stay on the
-		// Space's persistent volume and are pruned locally.
+		// Raw IPs and machine identifiers are never stored at all, so there is
+		// no "raw" subtree to restore or publish.
 		RestorePrefixes: envList("RESTORE_PREFIXES",
 			[]string{"identities", "markers", "events", "results"}),
 

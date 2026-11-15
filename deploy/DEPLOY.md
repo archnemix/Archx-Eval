@@ -81,18 +81,18 @@ The relay now restores its own state from the dataset at boot, so identities and
 the event log survive a restart even with no volume. But two things cannot live
 in a git dataset and still be correct:
 
-1. **The rate log** must be local and fast; it is written on every request.
-2. **Raw identity rows are never published** (see below), so they exist only
-   locally.
+**The rate log** must be local and fast; it is written on every request and is
+deliberately not published.
 
 Without a volume, therefore:
 
 - the spam ladder resets on every restart;
-- raw identity rows are lost on every restart, which is survivable but weakens
-  the marker set.
+- identities, events and results still survive, because they come back from the
+  dataset.
 
-Mount persistent storage at `/app/data` for raw rows, and at `/app/rate` (or
-`RATE_DIR=/app/data/rate`) for the rate log.
+Mount persistent storage at `/app/rate` (or `RATE_DIR=/app/data/rate`) for the
+rate log. `DATA_DIR` is worth mounting too, but the dataset covers it: identities
+and events are restored at boot.
 
 In **Settings → Persistent storage**, mount storage and point it at `/app/data`
 (hashed identities, raw rows, event log, results). Ideally mount a second volume
@@ -147,15 +147,18 @@ single fact drives this table.
 | `markers/<ab>/<hash>.json` | **yes** | salted hashes only |
 | `events/<date>.jsonl` | **yes** | hashes, country, OS, arch, decision — no raw values |
 | `results/<date>.jsonl` | **yes** | benchmark outcomes, which are the point of the system |
-| `raw/<ab>/<id>.json` | **NO** | contains the IP address and machine identifier |
 | `rate/` | **NO** | operational state, and it changes every second |
 
-The raw rows are the one thing that cannot be honoured in a git repo: publishing
-them and then "deleting" them after 30 days would leave the data in history
-permanently, which would make the retention promise false. They therefore live
-only on the Space's persistent volume, and `Prune` deletes them locally on
-schedule. A test (`TestDatasetReceivesNoRawIdentity`) asserts that no published
-file ever contains an IP, machine id or disk id.
+There is no `raw/` subtree anywhere in the system, because raw values are never
+written down. Publishing personal data into a git repository and then "deleting"
+it after 30 days would be a lie: the commit graph keeps it for ever. Rather than
+managing that risk, the relay removes it — the IP and device identifiers are
+hashed on arrival and discarded, so the dataset, its entire history, and the
+Space's volume all contain nothing but hashes.
+
+Asserted by `TestNoRawIdentityAnywhereOnDisk` (sweeps every byte the service
+writes), `TestDatasetReceivesNoRawIdentity` (sweeps everything published) and
+`TestAccessLogContainsNoRawAddress` (sweeps the HTTP log).
 
 ## Write batching: why the relay does not commit per request
 

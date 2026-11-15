@@ -177,6 +177,8 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 }
 
 func housekeep(ctx context.Context, svc *core.Service, cfg config.Config, log *slog.Logger) {
+	// Bans still expire, so the pruner stays; there is no personal data left to
+	// delete, which is the point.
 	pruneEvery := 6 * time.Hour
 	pruneTicker := time.NewTicker(pruneEvery)
 	flushTicker := time.NewTicker(cfg.FlushInterval)
@@ -185,19 +187,18 @@ func housekeep(ctx context.Context, svc *core.Service, cfg config.Config, log *s
 	defer flushTicker.Stop()
 	defer rateTicker.Stop()
 
-	const rawTTL = 30 * 24 * time.Hour
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-pruneTicker.C:
-			n, err := svc.Prune(rawTTL)
+			n, err := svc.Prune()
 			if err != nil {
 				log.Error("prune failed", "err", err)
 				continue
 			}
 			if n > 0 {
-				log.Info("pruned raw identity rows", "count", n)
+				log.Info("cleared expired bans", "count", n)
 			}
 		case <-flushTicker.C:
 			if err := svc.Flush(); err != nil {

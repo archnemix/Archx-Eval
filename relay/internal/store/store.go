@@ -9,7 +9,12 @@
 //	identities/<ab>/<id>.json      one record per known caller (hashes only)
 //	markers/<ab>/<hash>.json       marker -> identity ids reverse index
 //	events/<YYYY-MM-DD>.jsonl      append-only decision log
-//	raw/<ab>/<id>.json             raw ip/machine_id/disk_uuid (private, TTL'd)
+//
+// There is deliberately no raw subtree. Raw IP addresses and machine
+// identifiers are never written to disk anywhere: they exist only as arguments
+// inside one function, are hashed immediately, and are then discarded. What is
+// stored is impossible to turn back into a person, which removes the breach,
+// retention and deletion problems rather than managing them.
 //
 // <ab> is the first two hex characters of a sha256, so no directory ever grows
 // past ~1/256 of the corpus and a lookup is a single file open.
@@ -66,18 +71,6 @@ type IndexEntry struct {
 	BannedUntil time.Time `json:"banned_until,omitempty"`
 }
 
-// RawIdentity is the sensitive half and lives only in the private dataset.
-type RawIdentity struct {
-	ID        string    `json:"id"`
-	IP        string    `json:"ip"`
-	IPVersion string    `json:"ip_version"`
-	Network   string    `json:"network"`
-	MachineID string    `json:"machine_id"`
-	DiskUUID  string    `json:"disk_uuid"`
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"`
-}
-
 // Event is one append-only decision record.
 type Event struct {
 	TS         time.Time `json:"ts"`
@@ -110,7 +103,6 @@ type Store struct {
 
 	records map[string]*Record  // id -> record
 	markers map[string][]string // marker hash -> ids
-	raw     map[string]*RawIdentity
 
 	events int
 }
@@ -120,7 +112,7 @@ func Open(dir string) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("store: empty data dir")
 	}
-	for _, sub := range []string{"identities", "markers", "events", "raw"} {
+	for _, sub := range []string{"identities", "markers", "events", "results"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o750); err != nil {
 			return nil, fmt.Errorf("store: create %s: %w", sub, err)
 		}
@@ -129,7 +121,6 @@ func Open(dir string) (*Store, error) {
 		dir:     dir,
 		records: map[string]*Record{},
 		markers: map[string][]string{},
-		raw:     map[string]*RawIdentity{},
 	}
 	if err := s.loadIndex(); err != nil {
 		return nil, err
@@ -137,10 +128,28 @@ func Open(dir string) (*Store, error) {
 	if err := s.loadRecords(); err != nil {
 		return nil, err
 	}
-	if err := s.loadRaw(); err != nil {
-		return nil, err
-	}
 	return s, nil
+}
+
+func (s *Store) loadIndex() error {
+	path := filepath.Join(s.dir, "index.json")
+	buf, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		idx := Index{Version: FormatVersion, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		return writeJSON(path, &idx)
+	}
+	if err != nil {
+		return fmt.Errorf("store: read index: %w", err)
+	}
+	var idx Index
+	if err := json.Unmarshal(buf, &idx); err != nil {
+		return fmt.Errorf("store: parse index: %w", err)
+	}
+	if idx.Version != FormatVersion {
+		return fmt.Errorf("store: index version %d, expected %d", idx.Version, FormatVersion)
+	}
+	s.events = idx.Events
+	return nil
 }
 
 // loadRecords rebuilds records and the marker index from the shard tree.
@@ -186,69 +195,6 @@ func (s *Store) loadRecords() error {
 			}
 		}
 	}
-	return nil
-}
-
-// loadRaw rebuilds the sensitive tree. Only used to answer lookups; the data
-// never leaves the process except through ExportSnapshot.
-func (s *Store) loadRaw() error {
-	root := filepath.Join(s.dir, "raw")
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("store: read raw: %w", err)
-	}
-	for _, shardDir := range entries {
-		if !shardDir.IsDir() || !ValidShard(shardDir.Name()) {
-			continue
-		}
-		inner := filepath.Join(root, shardDir.Name())
-		files, err := os.ReadDir(inner)
-		if err != nil {
-			return fmt.Errorf("store: read %s: %w", inner, err)
-		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
-				continue
-			}
-			buf, err := os.ReadFile(filepath.Join(inner, f.Name()))
-			if err != nil {
-				return fmt.Errorf("store: read %s: %w", f.Name(), err)
-			}
-			var raw RawIdentity
-			if err := json.Unmarshal(buf, &raw); err != nil {
-				return fmt.Errorf("store: parse %s: %w", f.Name(), err)
-			}
-			if raw.ID == "" {
-				continue
-			}
-			clone := raw
-			s.raw[clone.ID] = &clone
-		}
-	}
-	return nil
-}
-
-func (s *Store) loadIndex() error {
-	path := filepath.Join(s.dir, "index.json")
-	buf, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		idx := Index{Version: FormatVersion, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-		return writeJSON(path, &idx)
-	}
-	if err != nil {
-		return fmt.Errorf("store: read index: %w", err)
-	}
-	var idx Index
-	if err := json.Unmarshal(buf, &idx); err != nil {
-		return fmt.Errorf("store: parse index: %w", err)
-	}
-	if idx.Version != FormatVersion {
-		return fmt.Errorf("store: index version %d, expected %d", idx.Version, FormatVersion)
-	}
-	s.events = idx.Events
 	return nil
 }
 
@@ -346,27 +292,6 @@ func (s *Store) persistLocked(rec *Record) error {
 	return nil
 }
 
-// PutRaw stores the sensitive fields. Only the private dataset mirrors this
-// tree, and Prune removes it on schedule.
-func (s *Store) PutRaw(raw *RawIdentity) error {
-	s.mu.Lock()
-	s.raw[raw.ID] = raw
-	s.mu.Unlock()
-	return writeJSON(filepath.Join(s.dir, "raw", shard(raw.ID), raw.ID+".json"), raw)
-}
-
-// Raw returns a copy of the sensitive record.
-func (s *Store) Raw(id string) (*RawIdentity, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	r, ok := s.raw[id]
-	if !ok {
-		return nil, false
-	}
-	clone := *r
-	return &clone, true
-}
-
 // AppendEvent adds one line to today's decision log.
 func (s *Store) AppendEvent(ev Event) error {
 	if ev.TS.IsZero() {
@@ -394,39 +319,31 @@ func (s *Store) AppendEvent(ev Event) error {
 	return nil
 }
 
-// Prune removes raw identity rows older than ttl and clears expired bans.
-// It returns how many raw rows went away so the caller can log it.
-func (s *Store) Prune(now time.Time, ttl time.Duration) (int, error) {
+// Prune clears expired bans. There is no personal data left to expire: only
+// salted hashes are stored, and a hash has no retention obligation.
+func (s *Store) Prune(now time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	removed := 0
-	for id, raw := range s.raw {
-		if now.Sub(raw.LastSeen) > ttl {
-			if err := os.Remove(filepath.Join(s.dir, "raw", shard(id), id+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return removed, err
-			}
-			delete(s.raw, id)
-			removed++
-		}
-	}
+	cleared := 0
 	for _, rec := range s.records {
 		if !rec.BannedUntil.IsZero() && !now.Before(rec.BannedUntil) {
 			rec.BannedUntil = time.Time{}
 			rec.BanReason = ""
 			if err := s.persistLocked(rec); err != nil {
-				return removed, err
+				return cleared, err
 			}
+			cleared++
 		}
 	}
-	return removed, nil
+	return cleared, nil
 }
 
 // Stats reports headline counters for the health endpoint.
-func (s *Store) Stats() (records, markers, raw int) {
+func (s *Store) Stats() (records, markers int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.records), len(s.markers), len(s.raw)
+	return len(s.records), len(s.markers)
 }
 
 // FlushIndex writes the manifest. Best effort; called on shutdown and by the
@@ -503,9 +420,6 @@ func ShardOf(key string) string { return shard(key) }
 // RecordPath is the dataset path for a hashed identity record.
 func RecordPath(id string) string { return path.Join("identities", shard(id), id+".json") }
 
-// RawPath is the dataset path for a sensitive identity row.
-func RawPath(id string) string { return path.Join("raw", shard(id), id+".json") }
-
 // EventPath is the dataset path for one day of the event log.
 func EventPath(at time.Time) string {
 	return path.Join("events", at.UTC().Format("2006-01-02")+".jsonl")
@@ -519,15 +433,6 @@ func ResultPath(at time.Time) string {
 // MarshalRecord serialises a record exactly as it is stored.
 func MarshalRecord(rec *Record) ([]byte, error) {
 	buf, err := json.MarshalIndent(rec, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(buf, '\n'), nil
-}
-
-// MarshalRaw serialises a raw identity row exactly as it is stored.
-func MarshalRaw(raw *RawIdentity) ([]byte, error) {
-	buf, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return nil, err
 	}
