@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -251,4 +252,44 @@ func TestExportSnapshotExcludesRaw(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// The bank is the answer key. It must never be a publishable subtree, because
+// the dataset is written by this service and the Space repository is public.
+func TestBankIsNeverPublishable(t *testing.T) {
+	for _, sub := range PublishableSubtrees {
+		if sub == "bank" {
+			t.Fatal("bank must never appear in PublishableSubtrees: it is the answer key")
+		}
+	}
+
+	h := newHarness(t, 50)
+	if _, err := h.svc.RequestDraw(context.Background(), input("203.0.113.11", machB, diskB)); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if _, err := h.svc.ExportSnapshot(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "bank")); !os.IsNotExist(err) {
+		t.Fatalf("export produced a bank/ subtree (err=%v)", err)
+	}
+
+	// Even with examples loaded, no reference solution may reach the snapshot.
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		buf, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		if bytes.Contains(buf, []byte("reference_solution")) {
+			t.Fatalf("%s contains a reference solution", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

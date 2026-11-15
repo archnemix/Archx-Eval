@@ -129,6 +129,22 @@ func New(cfg Config, remote hf.Remote, log *slog.Logger) *Controller {
 	if cfg.MaxQueued <= 0 {
 		cfg.MaxQueued = DefaultConfig().MaxQueued
 	}
+	// MinInterval/MaxInterval bound the adaptive backoff. Leaving them zero is
+	// not harmless: widen() clamps to MaxInterval, so a zero ceiling would set
+	// the interval to 0 on the first failure and the controller would hammer a
+	// failing dataset in a tight loop instead of backing off.
+	if cfg.MinInterval <= 0 {
+		cfg.MinInterval = DefaultConfig().MinInterval
+	}
+	if cfg.MaxInterval <= 0 {
+		cfg.MaxInterval = DefaultConfig().MaxInterval
+	}
+	if cfg.MaxInterval < cfg.Interval {
+		cfg.MaxInterval = cfg.Interval
+	}
+	if cfg.MinInterval > cfg.Interval {
+		cfg.MinInterval = cfg.Interval
+	}
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -457,6 +473,9 @@ func (c *Controller) narrow() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	next := c.interval * 3 / 4
+	if next < c.cfg.MinInterval {
+		next = c.cfg.MinInterval
+	}
 	if next < c.cfg.Interval {
 		next = c.cfg.Interval
 	}
@@ -488,7 +507,11 @@ func Restore(ctx context.Context, remote hf.Remote, prefix, destRoot string, con
 	for _, f := range files {
 		paths = append(paths, f.Path)
 	}
-	d := hf.Downloader{Remote: remote, Concurrency: concurrency}
+	// Strip the prefix so a subtree's contents land directly in destRoot. The
+	// bank is the reason this matters: restore("bank", BANK_DIR) must produce
+	// BANK_DIR/python/easy.jsonl, not BANK_DIR/bank/python/easy.jsonl, or the
+	// loader finds nothing and the relay serves 503 forever.
+	d := hf.Downloader{Remote: remote, Concurrency: concurrency, Prefix: prefix}
 	return d.DownloadAll(ctx, destRoot, paths)
 }
 

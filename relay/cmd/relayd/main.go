@@ -67,6 +67,18 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 	if err := restoreState(bootCtx, cfg, log); err != nil {
 		log.Error("restore failed; continuing with local state", "err", err)
 	}
+	// The bank is the answer key: it lives in the private dataset and nowhere
+	// else. Peek at the local directory first so an operator-provided volume
+	// wins over the dataset copy, then fetch only if it is empty.
+	if !localBankPresent(cfg.BankDir) {
+		if err := ensureBankDir(cfg.BankDir); err != nil {
+			log.Error("bank directory unusable", "err", err)
+		} else if err := restoreBank(bootCtx, cfg, log); err != nil {
+			log.Error("bank restore failed; /health will report not-ready", "err", err)
+		}
+	} else {
+		log.Info("local bank present; dataset bank not fetched", "dir", cfg.BankDir)
+	}
 	bootCancel()
 
 	st, err := store.Open(cfg.DataDir)

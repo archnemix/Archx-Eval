@@ -109,3 +109,85 @@ func TestCollect(t *testing.T) {
 		t.Fatalf("limit 0 should mean unlimited: %v %d", err, len(limited))
 	}
 }
+
+// Regression: restore("bank", BANK_DIR) must strip the prefix, otherwise the
+// bank lands in BANK_DIR/bank/... and the loader finds nothing. A Space booted
+// with that bug serves 503 forever while logging a successful restore.
+func TestDownloadAllStripsPrefix(t *testing.T) {
+	root := t.TempDir()
+	remote := &stubRemote{files: map[string][]byte{
+		"bank/python/easy.jsonl": []byte(`{"id":"a"}`),
+		"bank/logic/hard.jsonl":  []byte(`{"id":"b"}`),
+		"bank/usage.json":        []byte(`{}`),
+		"identities/ab/x.json":   []byte(`{}`),
+	}}
+	d := Downloader{Remote: remote, Prefix: "bank", Concurrency: 2}
+	n, err := d.DownloadAll(context.Background(), root, []string{
+		"bank/python/easy.jsonl",
+		"bank/logic/hard.jsonl",
+		"bank/usage.json",
+		"identities/ab/x.json", // outside the prefix: must be skipped
+	})
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("wrote %d files, want 3 (the sibling path must be skipped)", n)
+	}
+	for _, rel := range []string{"python/easy.jsonl", "logic/hard.jsonl", "usage.json"} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("missing %s: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "bank")); !os.IsNotExist(err) {
+		t.Errorf("prefix directory was not stripped: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "identities")); !os.IsNotExist(err) {
+		t.Errorf("path outside the prefix was written: %v", err)
+	}
+}
+
+func TestTrimPrefixPath(t *testing.T) {
+	cases := []struct {
+		path, prefix, want string
+		ok                 bool
+	}{
+		{"bank/python/e.md", "bank", "python/e.md", true},
+		{"bank/python/e.md", "bank/", "python/e.md", true},
+		{"bank", "bank", "", false},
+		{"bank/", "bank", "", false},
+		{"bankx/e.md", "bank", "", false},
+		{"identities/a.json", "bank", "", false},
+		{"anything", "", "anything", true},
+	}
+	for _, c := range cases {
+		got, ok := trimPrefixPath(c.path, c.prefix)
+		if ok != c.ok || got != c.want {
+			t.Errorf("trimPrefixPath(%q,%q) = (%q,%v), want (%q,%v)",
+				c.path, c.prefix, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// stubRemote serves an in-memory file map for Downloader tests.
+type stubRemote struct {
+	files map[string][]byte
+}
+
+func (s *stubRemote) List(ctx context.Context, prefix string) ([]RemoteFile, error) {
+	var out []RemoteFile
+	for p := range s.files {
+		out = append(out, RemoteFile{Path: p})
+	}
+	return out, nil
+}
+
+func (s *stubRemote) Publish(ctx context.Context, msg string, files []File) error { return nil }
+
+func (s *stubRemote) Download(ctx context.Context, path string) ([]byte, error) {
+	b, ok := s.files[path]
+	if !ok {
+		return nil, &APIError{Status: http.StatusNotFound}
+	}
+	return b, nil
+}

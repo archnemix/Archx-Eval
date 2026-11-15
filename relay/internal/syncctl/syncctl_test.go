@@ -447,3 +447,40 @@ func TestRetryableClassification(t *testing.T) {
 		t.Fatal("transport errors should be retried")
 	}
 }
+
+// Regression: MaxInterval used to be left at zero, so the first failed flush
+// clamped the interval to 0 and the controller retried in a tight loop against
+// a dataset that was already failing. That is the worst possible time to
+// multiply the request rate.
+func TestBackoffNeverCollapsesToZero(t *testing.T) {
+	// Deliberately omit MinInterval/MaxInterval, as main.go does.
+	c := New(Config{Interval: 30 * time.Second, MaxFiles: 10}, &fakeRemote{}, nil)
+
+	c.widen()
+	if got := c.currentInterval(); got <= 0 {
+		t.Fatalf("interval after one backoff = %v, want > 0", got)
+	}
+	prev := c.currentInterval()
+	for i := 0; i < 20; i++ {
+		c.widen()
+		cur := c.currentInterval()
+		if cur < prev {
+			t.Fatalf("interval shrank on backoff: %v -> %v", prev, cur)
+		}
+		if cur > 10*time.Minute {
+			t.Fatalf("interval %v exceeded the 10m ceiling", cur)
+		}
+		prev = cur
+	}
+	if prev != 10*time.Minute {
+		t.Fatalf("after 20 backoffs interval = %v, want the 10m ceiling", prev)
+	}
+
+	// And narrow() must not undershoot the floor.
+	for i := 0; i < 60; i++ {
+		c.narrow()
+	}
+	if got := c.currentInterval(); got < 15*time.Second {
+		t.Fatalf("interval after repeated narrowing = %v, want >= 15s", got)
+	}
+}

@@ -500,6 +500,29 @@ func truncate(s string, n int) string {
 type Downloader struct {
 	Remote      Remote
 	Concurrency int
+
+	// Prefix, when set, is stripped from every remote path before it is joined
+	// onto destRoot. It exists because callers ask for a subtree ("bank/") but
+	// want its *contents* placed directly in the destination directory.
+	Prefix string
+}
+
+// trimPrefixPath strips a leading subtree from a remote path. It returns false
+// when the path names the prefix directory itself or a sibling of it, which the
+// caller must skip rather than write outside its destination.
+func trimPrefixPath(path, prefix string) (string, bool) {
+	if prefix == "" {
+		return path, true
+	}
+	want := strings.Trim(prefix, "/") + "/"
+	if !strings.HasPrefix(path, want) {
+		return "", false
+	}
+	rel := strings.TrimPrefix(path, want)
+	if rel == "" {
+		return "", false
+	}
+	return rel, true
 }
 
 // DownloadAll fetches paths into destRoot, preserving relative paths. It
@@ -542,10 +565,11 @@ func (d Downloader) DownloadAll(ctx context.Context, destRoot string, paths []st
 					mu.Unlock()
 					continue
 				}
-				if err := safeJoinCheck(p); err != nil {
+				rel, ok := trimPrefixPath(p, d.Prefix)
+				if !ok || safeJoinCheck(rel) != nil {
 					continue
 				}
-				dst := filepath.Join(destRoot, filepath.FromSlash(p))
+				dst := filepath.Join(destRoot, filepath.FromSlash(rel))
 				if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 					mu.Lock()
 					if firstErr == nil {

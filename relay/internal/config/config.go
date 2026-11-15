@@ -59,9 +59,16 @@ type Config struct {
 	// RestoreOnBoot pulls the relay's own state back from the dataset before
 	// serving, so a sleeping Space resumes with its memory intact.
 	RestoreOnBoot bool
-	// RestorePrefixes lists the dataset subtrees the relay owns. The bank is
-	// deliberately excluded: the relay mounts or fetches it, never publishes it.
+	// RestorePrefixes lists the relay-owned dataset subtrees restored at boot.
+	// The bank is deliberately excluded from this list because it is read from
+	// the dataset on a separate path (BankFromDataset) and never published.
 	RestorePrefixes []string
+
+	// BankFromDataset pulls the question bank out of the private dataset at
+	// boot. The bank is the answer key and must never be committed to this
+	// public repository or uploaded into a public Space, and a Space's disk is
+	// wiped on restart, so the private dataset is its only durable home.
+	BankFromDataset bool
 
 	// FlushInterval is the maximum time a rejection is allowed to sit in
 	// memory before being persisted. Accepted draws always flush inline.
@@ -91,7 +98,9 @@ func Load() Config {
 	c := Config{
 		Addr:    envStr("ADDR", ":7860"),
 		BankDir: envStr("BANK_DIR", "bank"),
-		DataDir: envStr("DATA_DIR", "data"),
+		// Default on: the bank is useless if the Space starts without it.
+		BankFromDataset: envBool("BANK_FROM_DATASET", true),
+		DataDir:         envStr("DATA_DIR", "data"),
 
 		TrustedProxyHops: envInt("TRUSTED_PROXY_HOPS", 1),
 
