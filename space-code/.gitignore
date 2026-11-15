@@ -1,0 +1,5 @@
+# Never commit data to this Space. It is public; the dataset is not.
+bank/
+testdata/
+*.env
+.env*
