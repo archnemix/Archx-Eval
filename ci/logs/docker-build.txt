@@ -8,95 +8,87 @@
 #2 DONE 0.0s
 
 #3 resolve image config for docker-image://docker.io/docker/dockerfile:1
-#3 DONE 0.7s
+#3 DONE 0.5s
 
 #4 docker-image://docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 #4 resolve docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e done
-#4 sha256:9d2b4f57f9e20f33279375ce25c6ff14f30f64270ed5c7b613b2b30256754f62 0B / 14.28MB 0.1s
-#4 sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e 9.08kB / 9.08kB done
+#4 extracting sha256:9d2b4f57f9e20f33279375ce25c6ff14f30f64270ed5c7b613b2b30256754f62
 #4 sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148 1.13kB / 1.13kB done
 #4 sha256:528c92d70d7e39dbb3dd1c6681f6750c565c7e45b70527cda47c1a61495c1b6a 1.41kB / 1.41kB done
-#4 sha256:9d2b4f57f9e20f33279375ce25c6ff14f30f64270ed5c7b613b2b30256754f62 14.28MB / 14.28MB 0.2s
-#4 sha256:9d2b4f57f9e20f33279375ce25c6ff14f30f64270ed5c7b613b2b30256754f62 14.28MB / 14.28MB 0.2s done
+#4 sha256:9d2b4f57f9e20f33279375ce25c6ff14f30f64270ed5c7b613b2b30256754f62 14.28MB / 14.28MB 0.1s done
+#4 sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e 9.08kB / 9.08kB done
 #4 extracting sha256:9d2b4f57f9e20f33279375ce25c6ff14f30f64270ed5c7b613b2b30256754f62 0.1s done
-#4 DONE 0.4s
+#4 DONE 0.2s
 
-#5 [internal] load metadata for docker.io/library/golang:1.22-alpine
-#5 ...
+#5 [auth] library/golang:pull token for registry-1.docker.io
+#5 DONE 0.0s
 
 #6 [auth] library/alpine:pull token for registry-1.docker.io
 #6 DONE 0.0s
 
-#7 [auth] library/golang:pull token for registry-1.docker.io
-#7 DONE 0.0s
+#7 [internal] load metadata for docker.io/library/golang:1.22-alpine
+#7 DONE 0.4s
 
 #8 [internal] load metadata for docker.io/library/alpine:3.20
-#8 ...
-
-#5 [internal] load metadata for docker.io/library/golang:1.22-alpine
-#5 DONE 0.6s
-
-#8 [internal] load metadata for docker.io/library/alpine:3.20
-#8 DONE 0.6s
+#8 DONE 0.4s
 
 #9 [internal] load .dockerignore
 #9 transferring context: 66B done
 #9 DONE 0.0s
 
 #10 [internal] load build context
-#10 transferring context: 170.89kB done
+#10 transferring context: 176.81kB 0.0s done
 #10 DONE 0.0s
 
 #11 [build 1/6] FROM docker.io/library/golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052
 #11 resolve docker.io/library/golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052 done
-#11 sha256:4129f51f28c9ae5de799b958ba2aaa8f92f26cc7bf47c107891673fe4b516c03 2.08kB / 2.08kB done
-#11 sha256:1f3e46996e2966e4faa5846e56e76e3748b7315e2ded61476c24403d592134f0 0B / 3.64MB 0.1s
+#11 extracting sha256:1f3e46996e2966e4faa5846e56e76e3748b7315e2ded61476c24403d592134f0
+#11 sha256:1f3e46996e2966e4faa5846e56e76e3748b7315e2ded61476c24403d592134f0 3.64MB / 3.64MB 0.1s done
 #11 sha256:4d75fd4b73869ed224045c010cdec78756eefb6752a5a8e4804294009eac11e9 0B / 294.90kB 0.1s
-#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 0B / 69.36MB 0.1s
+#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 9.44MB / 69.36MB 0.1s
+#11 sha256:5f837c998576dcb54bc285997f33fcc2166dff6aa48fe3a374da92474efd5fe8 0B / 126B 0.1s
 #11 sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052 10.30kB / 10.30kB done
 #11 sha256:6d405dfc5fdf3a45df1529cf060b920041f52ce523487e0f36f02765af294a51 1.92kB / 1.92kB done
-#11 sha256:1f3e46996e2966e4faa5846e56e76e3748b7315e2ded61476c24403d592134f0 3.64MB / 3.64MB 0.1s done
-#11 sha256:4d75fd4b73869ed224045c010cdec78756eefb6752a5a8e4804294009eac11e9 294.90kB / 294.90kB 0.2s done
-#11 extracting sha256:1f3e46996e2966e4faa5846e56e76e3748b7315e2ded61476c24403d592134f0 0.1s done
-#11 sha256:5f837c998576dcb54bc285997f33fcc2166dff6aa48fe3a374da92474efd5fe8 126B / 126B 0.2s done
-#11 sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 0B / 32B 0.2s
-#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 5.24MB / 69.36MB 0.3s
-#11 sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 32B / 32B 0.2s done
-#11 extracting sha256:4d75fd4b73869ed224045c010cdec78756eefb6752a5a8e4804294009eac11e9 0.0s done
-#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 23.07MB / 69.36MB 0.4s
+#11 sha256:4129f51f28c9ae5de799b958ba2aaa8f92f26cc7bf47c107891673fe4b516c03 2.08kB / 2.08kB done
+#11 sha256:4d75fd4b73869ed224045c010cdec78756eefb6752a5a8e4804294009eac11e9 294.90kB / 294.90kB 0.1s done
+#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 47.19MB / 69.36MB 0.2s
+#11 sha256:5f837c998576dcb54bc285997f33fcc2166dff6aa48fe3a374da92474efd5fe8 126B / 126B 0.1s done
+#11 sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 32B / 32B 0.1s done
 #11 ...
 
 #12 [stage-1 1/4] FROM docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
-#12 resolve docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc done
+#12 resolve docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc 0.0s done
 #12 sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc 9.23kB / 9.23kB done
 #12 sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e 1.02kB / 1.02kB done
 #12 sha256:bf8527eb54c3680e728d5b4b383a8ba730d72dae7236fbc8dff97ed6b224a731 612B / 612B done
-#12 sha256:25f1d6b1951ac8eb3740558fe94cb83d377bdadf95fd9f98b50d2e1b96130471 3.63MB / 3.63MB 0.4s done
 #12 extracting sha256:25f1d6b1951ac8eb3740558fe94cb83d377bdadf95fd9f98b50d2e1b96130471 0.1s done
-#12 DONE 0.5s
+#12 sha256:25f1d6b1951ac8eb3740558fe94cb83d377bdadf95fd9f98b50d2e1b96130471 3.63MB / 3.63MB 0.2s done
+#12 DONE 0.4s
 
 #11 [build 1/6] FROM docker.io/library/golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052
-#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 69.36MB / 69.36MB 0.6s
-#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 69.36MB / 69.36MB 0.9s done
+#11 extracting sha256:1f3e46996e2966e4faa5846e56e76e3748b7315e2ded61476c24403d592134f0 0.2s done
+#11 sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 69.36MB / 69.36MB 0.3s done
+#11 extracting sha256:4d75fd4b73869ed224045c010cdec78756eefb6752a5a8e4804294009eac11e9
+#11 extracting sha256:4d75fd4b73869ed224045c010cdec78756eefb6752a5a8e4804294009eac11e9 0.1s done
 #11 extracting sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac
 #11 ...
 
 #13 [stage-1 2/4] RUN apk add --no-cache ca-certificates tzdata  && addgroup -g 1000 relay  && adduser -D -u 1000 -G relay relay  && mkdir -p /app/data /app/bank /app/rate  && chown -R relay:relay /app
-#13 0.425 fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz
-#13 0.577 fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/community/x86_64/APKINDEX.tar.gz
-#13 0.871 (1/2) Installing ca-certificates (20261020-r0)
-#13 0.899 (2/2) Installing tzdata (2026b-r0)
-#13 0.966 Executing busybox-1.36.1-r31.trigger
-#13 0.973 Executing ca-certificates-20261020-r0.trigger
-#13 1.005 OK: 10 MiB in 16 packages
-#13 DONE 2.1s
+#13 0.178 fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz
+#13 0.270 fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/community/x86_64/APKINDEX.tar.gz
+#13 0.646 (1/2) Installing ca-certificates (20261020-r0)
+#13 0.667 (2/2) Installing tzdata (2026b-r0)
+#13 0.736 Executing busybox-1.36.1-r31.trigger
+#13 0.743 Executing ca-certificates-20261020-r0.trigger
+#13 0.788 OK: 10 MiB in 16 packages
+#13 DONE 1.0s
 
 #11 [build 1/6] FROM docker.io/library/golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052
-#11 extracting sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 2.6s done
+#11 extracting sha256:afa154b433c7f72db064d19e1bcfa84ee196ad29120328f6bdb2c5fbd7b8eeac 4.1s done
 #11 extracting sha256:5f837c998576dcb54bc285997f33fcc2166dff6aa48fe3a374da92474efd5fe8
 #11 extracting sha256:5f837c998576dcb54bc285997f33fcc2166dff6aa48fe3a374da92474efd5fe8 done
 #11 extracting sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 done
-#11 DONE 4.6s
+#11 DONE 5.0s
 
 #14 [build 2/6] WORKDIR /src
 #14 DONE 0.0s
@@ -105,14 +97,14 @@
 #15 DONE 0.0s
 
 #16 [build 4/6] RUN go mod download
-#16 0.092 go: no module dependencies to download
+#16 0.131 go: no module dependencies to download
 #16 DONE 0.1s
 
 #17 [build 5/6] COPY . .
 #17 DONE 0.0s
 
 #18 [build 6/6] RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64     go build -trimpath -ldflags="-s -w -buildid=" -o /out/relayd ./cmd/relayd
-#18 DONE 7.3s
+#18 DONE 10.1s
 
 #19 [stage-1 3/4] COPY --from=build /out/relayd /app/relayd
 #19 DONE 0.0s
@@ -121,8 +113,7 @@
 #20 DONE 0.0s
 
 #21 exporting to image
-#21 exporting layers
-#21 exporting layers 0.3s done
-#21 writing image sha256:777e78ba51530df57d1fe5fa06f738e8f590e1b5dd908b29449d46fd356e9ed2 done
+#21 exporting layers 0.1s done
+#21 writing image sha256:98a529a76bb08289ae23274c8cae8776a57e2ce99179dbfdbc384b796edbd5a0 done
 #21 naming to docker.io/library/archx-eval-relay:ci done
-#21 DONE 0.3s
+#21 DONE 0.1s

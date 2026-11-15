@@ -18,19 +18,19 @@
 === RUN   TestExampleValidateCoversKinds
 --- PASS: TestExampleValidateCoversKinds (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/bank	1.026s
+ok  	github.com/archnemix/archx-eval/relay/internal/bank	1.025s
 === RUN   TestNewIdentityGetsDraw
---- PASS: TestNewIdentityGetsDraw (0.02s)
+--- PASS: TestNewIdentityGetsDraw (0.08s)
 === RUN   TestSameIdentityBlockedForOneHour
 --- PASS: TestSameIdentityBlockedForOneHour (0.01s)
 === RUN   TestChangingOneMarkerStillMatches
---- PASS: TestChangingOneMarkerStillMatches (0.02s)
+--- PASS: TestChangingOneMarkerStillMatches (0.03s)
 === RUN   TestAllMarkersNewIsNewPerson
 --- PASS: TestAllMarkersNewIsNewPerson (0.01s)
 === RUN   TestWindowExpiryAllowsSecondDraw
 --- PASS: TestWindowExpiryAllowsSecondDraw (0.01s)
 === RUN   TestSizeCapEnforced
---- PASS: TestSizeCapEnforced (0.01s)
+--- PASS: TestSizeCapEnforced (0.03s)
 === RUN   TestBurstSpamBans
 --- PASS: TestBurstSpamBans (0.05s)
 === RUN   TestBanSurvivesWindowReset
@@ -40,7 +40,7 @@ ok  	github.com/archnemix/archx-eval/relay/internal/bank	1.026s
 === RUN   TestUnknownCategoryRejected
 --- PASS: TestUnknownCategoryRejected (0.00s)
 === RUN   TestUsageCountedAndStaleAfterThree
---- PASS: TestUsageCountedAndStaleAfterThree (0.01s)
+--- PASS: TestUsageCountedAndStaleAfterThree (0.02s)
 === RUN   TestRespectsProxyHeadersForDifferentiation
 --- PASS: TestRespectsProxyHeadersForDifferentiation (0.01s)
 === RUN   TestInvalidDeviceRejected
@@ -56,41 +56,43 @@ ok  	github.com/archnemix/archx-eval/relay/internal/bank	1.026s
 === RUN   TestPruneClearsBansButKeepsMemory
 --- PASS: TestPruneClearsBansButKeepsMemory (0.01s)
 === RUN   TestBurstBanSurvivesRestart
---- PASS: TestBurstBanSurvivesRestart (0.05s)
+--- PASS: TestBurstBanSurvivesRestart (0.08s)
 === RUN   TestRateHistorySurvivesRestart
---- PASS: TestRateHistorySurvivesRestart (0.03s)
+--- PASS: TestRateHistorySurvivesRestart (0.08s)
 === RUN   TestDrawWindowSurvivesRestart
---- PASS: TestDrawWindowSurvivesRestart (0.01s)
+--- PASS: TestDrawWindowSurvivesRestart (0.38s)
 === RUN   TestUsageCountersSurviveRestart
---- PASS: TestUsageCountersSurviveRestart (0.01s)
+--- PASS: TestUsageCountersSurviveRestart (0.10s)
 === RUN   TestAccessTokenRequired
---- PASS: TestAccessTokenRequired (0.00s)
+--- PASS: TestAccessTokenRequired (0.02s)
 === RUN   TestNoTokenConfiguredMeansClosed
---- PASS: TestNoTokenConfiguredMeansClosed (0.00s)
+--- PASS: TestNoTokenConfiguredMeansClosed (0.02s)
 === RUN   TestNetworkCeiling
---- PASS: TestNetworkCeiling (0.02s)
+--- PASS: TestNetworkCeiling (0.52s)
 === RUN   TestGlobalCeiling
---- PASS: TestGlobalCeiling (0.01s)
+--- PASS: TestGlobalCeiling (0.29s)
 === RUN   TestRateLogDirectoryIsSeparate
---- PASS: TestRateLogDirectoryIsSeparate (0.01s)
+--- PASS: TestRateLogDirectoryIsSeparate (0.09s)
 === RUN   TestDatasetReceivesNoRawIdentity
---- PASS: TestDatasetReceivesNoRawIdentity (0.01s)
+--- PASS: TestDatasetReceivesNoRawIdentity (0.04s)
 === RUN   TestDatasetReceivesHashedRecord
---- PASS: TestDatasetReceivesHashedRecord (0.01s)
+--- PASS: TestDatasetReceivesHashedRecord (0.13s)
 === RUN   TestDatasetReceivesEventLog
---- PASS: TestDatasetReceivesEventLog (0.01s)
+--- PASS: TestDatasetReceivesEventLog (0.11s)
 === RUN   TestSyncEnqueueNeverBlocksDraw
---- PASS: TestSyncEnqueueNeverBlocksDraw (0.13s)
+--- PASS: TestSyncEnqueueNeverBlocksDraw (2.32s)
 === RUN   TestExportSnapshotExcludesRaw
 --- PASS: TestExportSnapshotExcludesRaw (0.01s)
+=== RUN   TestBankIsNeverPublishable
+--- PASS: TestBankIsNeverPublishable (0.01s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/core	1.586s
+ok  	github.com/archnemix/archx-eval/relay/internal/core	5.561s
 === RUN   TestSelectRespectsSize
 --- PASS: TestSelectRespectsSize (0.00s)
 === RUN   TestSelectNeverDuplicates
 --- PASS: TestSelectNeverDuplicates (0.00s)
 === RUN   TestSelectSplitsAcrossCategories
---- PASS: TestSelectSplitsAcrossCategories (0.01s)
+--- PASS: TestSelectSplitsAcrossCategories (0.00s)
 === RUN   TestSelectHonoursMix
 --- PASS: TestSelectHonoursMix (0.01s)
 === RUN   TestSelectReportsShortfall
@@ -104,7 +106,7 @@ ok  	github.com/archnemix/archx-eval/relay/internal/core	1.586s
 === RUN   TestSelectIsRandomised
 --- PASS: TestSelectIsRandomised (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/draw	1.048s
+ok  	github.com/archnemix/archx-eval/relay/internal/draw	1.032s
 === RUN   TestDirSinkWritesTree
 --- PASS: TestDirSinkWritesTree (0.00s)
 === RUN   TestDirSinkRejectsTraversal
@@ -117,62 +119,66 @@ ok  	github.com/archnemix/archx-eval/relay/internal/draw	1.048s
 --- PASS: TestCommitSinkRequiresCredentials (0.00s)
 === RUN   TestCollect
 --- PASS: TestCollect (0.00s)
+=== RUN   TestDownloadAllStripsPrefix
+--- PASS: TestDownloadAllStripsPrefix (0.00s)
+=== RUN   TestTrimPrefixPath
+--- PASS: TestTrimPrefixPath (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/hf	1.021s
+ok  	github.com/archnemix/archx-eval/relay/internal/hf	1.018s
 === RUN   TestDrawHappyPath
---- PASS: TestDrawHappyPath (0.01s)
+--- PASS: TestDrawHappyPath (0.12s)
 === RUN   TestDrawNeverLeaksAnswers
---- PASS: TestDrawNeverLeaksAnswers (0.05s)
+--- PASS: TestDrawNeverLeaksAnswers (0.22s)
 === RUN   TestDrawSetsRequestIDHeader
---- PASS: TestDrawSetsRequestIDHeader (0.01s)
+--- PASS: TestDrawSetsRequestIDHeader (0.04s)
 === RUN   TestSecondDrawGets429WithRetryAfter
---- PASS: TestSecondDrawGets429WithRetryAfter (0.01s)
+--- PASS: TestSecondDrawGets429WithRetryAfter (0.20s)
 === RUN   TestMalformedJSONRejected
---- PASS: TestMalformedJSONRejected (0.00s)
+--- PASS: TestMalformedJSONRejected (0.02s)
 === RUN   TestUnknownFieldRejected
---- PASS: TestUnknownFieldRejected (0.00s)
+--- PASS: TestUnknownFieldRejected (0.01s)
 === RUN   TestOversizedBodyRejected
---- PASS: TestOversizedBodyRejected (0.10s)
+--- PASS: TestOversizedBodyRejected (0.07s)
 === RUN   TestHealthReflectsBank
---- PASS: TestHealthReflectsBank (0.00s)
+--- PASS: TestHealthReflectsBank (0.14s)
 === RUN   TestHealthUnavailableWhenBankEmpty
---- PASS: TestHealthUnavailableWhenBankEmpty (0.00s)
+--- PASS: TestHealthUnavailableWhenBankEmpty (0.02s)
 === RUN   TestCategories
---- PASS: TestCategories (0.00s)
+--- PASS: TestCategories (0.02s)
 === RUN   TestAdminStaleRequiresToken
---- PASS: TestAdminStaleRequiresToken (0.00s)
+--- PASS: TestAdminStaleRequiresToken (0.02s)
 === RUN   TestFeedbackAcceptedAndScored
---- PASS: TestFeedbackAcceptedAndScored (0.01s)
+--- PASS: TestFeedbackAcceptedAndScored (0.02s)
 === RUN   TestFeedbackRejectsBadInput
---- PASS: TestFeedbackRejectsBadInput (0.00s)
+--- PASS: TestFeedbackRejectsBadInput (0.02s)
 === RUN   TestEraseRemovesRawOnly
---- PASS: TestEraseRemovesRawOnly (0.01s)
+--- PASS: TestEraseRemovesRawOnly (0.45s)
 === RUN   TestIndexAnd404
---- PASS: TestIndexAnd404 (0.00s)
+--- PASS: TestIndexAnd404 (1.29s)
 === RUN   TestDrawRequiresToken
---- PASS: TestDrawRequiresToken (0.00s)
+--- PASS: TestDrawRequiresToken (0.06s)
 === RUN   TestDrawRejectsWrongToken
 --- PASS: TestDrawRejectsWrongToken (0.00s)
 === RUN   TestDrawAcceptsAlternateTokenHeader
---- PASS: TestDrawAcceptsAlternateTokenHeader (0.01s)
+--- PASS: TestDrawAcceptsAlternateTokenHeader (0.10s)
 === RUN   TestSecurityHeadersPresent
 --- PASS: TestSecurityHeadersPresent (0.00s)
 === RUN   TestNonJSONContentTypeRejected
 --- PASS: TestNonJSONContentTypeRejected (0.00s)
 === RUN   TestOversizedBodyRejectedBeforeParsing
---- PASS: TestOversizedBodyRejectedBeforeParsing (0.09s)
+--- PASS: TestOversizedBodyRejectedBeforeParsing (0.07s)
 === RUN   TestClientRequestIDCannotBeUnbounded
 --- PASS: TestClientRequestIDCannotBeUnbounded (0.00s)
 === RUN   TestSpoofedForwardedForDoesNotBypassWindow
---- PASS: TestSpoofedForwardedForDoesNotBypassWindow (0.02s)
+--- PASS: TestSpoofedForwardedForDoesNotBypassWindow (0.04s)
 === RUN   TestPrivateClientAddressRefused
---- PASS: TestPrivateClientAddressRefused (0.01s)
+--- PASS: TestPrivateClientAddressRefused (0.00s)
 === RUN   TestCategoryFloodRejected
 --- PASS: TestCategoryFloodRejected (0.00s)
 === RUN   TestFeedbackCannotBeUsedAsFreeStorage
---- PASS: TestFeedbackCannotBeUsedAsFreeStorage (0.02s)
+--- PASS: TestFeedbackCannotBeUsedAsFreeStorage (0.01s)
 === RUN   TestErrorResponsesDoNotLeakInternals
---- PASS: TestErrorResponsesDoNotLeakInternals (0.01s)
+--- PASS: TestErrorResponsesDoNotLeakInternals (0.00s)
 === RUN   TestAccessLogContainsNoRawAddress
 --- PASS: TestAccessLogContainsNoRawAddress (0.01s)
 === RUN   TestEraseReportsNoPersonalData
@@ -182,7 +188,7 @@ ok  	github.com/archnemix/archx-eval/relay/internal/hf	1.021s
 === RUN   TestMetricsDisabledWhenUnset
 --- PASS: TestMetricsDisabledWhenUnset (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/httpapi	1.427s
+ok  	github.com/archnemix/archx-eval/relay/internal/httpapi	3.986s
 === RUN   TestCanonicalIPv4Mapped
 --- PASS: TestCanonicalIPv4Mapped (0.00s)
 === RUN   TestCanonicalIPRejects
@@ -202,7 +208,7 @@ ok  	github.com/archnemix/archx-eval/relay/internal/httpapi	1.427s
 === RUN   TestLooksHosted
 --- PASS: TestLooksHosted (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/identity	1.015s
+ok  	github.com/archnemix/archx-eval/relay/internal/identity	1.012s
 ?   	github.com/archnemix/archx-eval/relay/internal/reputation	[no test files]
 === RUN   TestNewIdentityAllowed
 --- PASS: TestNewIdentityAllowed (0.00s)
@@ -229,7 +235,7 @@ ok  	github.com/archnemix/archx-eval/relay/internal/identity	1.015s
 === RUN   TestHumanise
 --- PASS: TestHumanise (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/limits	1.013s
+ok  	github.com/archnemix/archx-eval/relay/internal/limits	1.011s
 === RUN   TestRecordAndCount
 --- PASS: TestRecordAndCount (0.00s)
 === RUN   TestSurvivesRestart
@@ -243,7 +249,7 @@ ok  	github.com/archnemix/archx-eval/relay/internal/limits	1.013s
 === RUN   TestCompactRemovesEmptyKey
 --- PASS: TestCompactRemovesEmptyKey (0.00s)
 === RUN   TestMaxEntriesBound
---- PASS: TestMaxEntriesBound (0.04s)
+--- PASS: TestMaxEntriesBound (0.03s)
 === RUN   TestCountPrefix
 --- PASS: TestCountPrefix (0.00s)
 === RUN   TestConcurrentRecordAndCount
@@ -251,21 +257,21 @@ ok  	github.com/archnemix/archx-eval/relay/internal/limits	1.013s
 === RUN   TestRejectsEmptyKey
 --- PASS: TestRejectsEmptyKey (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/ratelog	1.087s
+ok  	github.com/archnemix/archx-eval/relay/internal/ratelog	1.071s
 === RUN   TestShardIsStableAndShort
 --- PASS: TestShardIsStableAndShort (0.00s)
 === RUN   TestPutAndLookupByAnyMarker
---- PASS: TestPutAndLookupByAnyMarker (0.01s)
+--- PASS: TestPutAndLookupByAnyMarker (0.04s)
 === RUN   TestPutIsIdempotentOnMarkers
---- PASS: TestPutIsIdempotentOnMarkers (0.00s)
+--- PASS: TestPutIsIdempotentOnMarkers (0.01s)
 === RUN   TestPersistenceSurvivesReopen
 --- PASS: TestPersistenceSurvivesReopen (0.00s)
 === RUN   TestAppendEventWritesJSONL
 --- PASS: TestAppendEventWritesJSONL (0.00s)
 === RUN   TestPruneOnlyClearsExpiredBans
---- PASS: TestPruneOnlyClearsExpiredBans (0.00s)
+--- PASS: TestPruneOnlyClearsExpiredBans (0.01s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/store	1.033s
+ok  	github.com/archnemix/archx-eval/relay/internal/store	1.062s
 === RUN   TestEnqueueCoalescesBatches
 --- PASS: TestEnqueueCoalescesBatches (0.00s)
 === RUN   TestDuplicatePathKeepsNewest
@@ -296,19 +302,21 @@ ok  	github.com/archnemix/archx-eval/relay/internal/store	1.033s
 --- PASS: TestSanitizePath (0.00s)
 === RUN   TestRetryableClassification
 --- PASS: TestRetryableClassification (0.00s)
+=== RUN   TestBackoffNeverCollapsesToZero
+--- PASS: TestBackoffNeverCollapsesToZero (0.00s)
 PASS
-ok  	github.com/archnemix/archx-eval/relay/internal/syncctl	1.506s
+ok  	github.com/archnemix/archx-eval/relay/internal/syncctl	1.503s
 	github.com/archnemix/archx-eval/relay/internal/apierr		coverage: 0.0% of statements
 	github.com/archnemix/archx-eval/relay/cmd/relayd		coverage: 0.0% of statements
 	github.com/archnemix/archx-eval/relay/internal/config		coverage: 0.0% of statements
 ok  	github.com/archnemix/archx-eval/relay/internal/bank	0.014s	coverage: 78.7% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/core	0.820s	coverage: 67.0% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/draw	0.031s	coverage: 74.0% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/hf	0.010s	coverage: 21.8% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/httpapi	0.241s	coverage: 70.0% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/identity	0.008s	coverage: 59.1% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/limits	0.006s	coverage: 73.5% of statements
 	github.com/archnemix/archx-eval/relay/internal/reputation		coverage: 0.0% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/ratelog	0.038s	coverage: 75.9% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/store	0.017s	coverage: 61.3% of statements
-ok  	github.com/archnemix/archx-eval/relay/internal/syncctl	0.492s	coverage: 86.9% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/core	1.337s	coverage: 67.0% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/draw	0.019s	coverage: 74.0% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/hf	0.008s	coverage: 34.9% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/httpapi	0.636s	coverage: 70.0% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/identity	0.003s	coverage: 59.1% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/limits	0.004s	coverage: 73.5% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/ratelog	0.027s	coverage: 75.9% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/store	0.030s	coverage: 61.3% of statements
+ok  	github.com/archnemix/archx-eval/relay/internal/syncctl	0.485s	coverage: 87.5% of statements
