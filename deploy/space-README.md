@@ -16,10 +16,12 @@ The API layer between a user's front-end runner and the private Archx-Eval
 question bank.
 
 The source of this Space is
-[`archnemix/Archx-Eval`](https://github.com/archnemix/Archx-Eval), uploaded by
-hand with `deploy/upload-space.py`. GitHub does not deploy it: the Space belongs
-to a different Hugging Face account than the dataset, and no token for this
-account is kept in CI.
+[`archnemix/Archx-Eval`](https://github.com/archnemix/Archx-Eval). The folder
+built by `deploy/upload-space.py` is uploaded here by hand through the web UI;
+GitHub does not deploy it and holds no token for this account.
+
+This Space is public and holds no answer key and no personal data. The private
+dataset does, and the only key to it is `HF_DATA_TOKEN`.
 
 The question bank is **not** in this repository. It is fetched at boot from the
 private dataset `Archnemix/Archx-Eval`, because the answer key must never sit in
@@ -46,7 +48,7 @@ Set these in **Settings → Variables and secrets** for this Space:
 | `RELAY_SALT` | keys every marker hash. Set once, never change it. |
 | `ACCESS_TOKEN` | required on every draw |
 | `ADMIN_TOKEN` | gates the operational endpoints |
-| `HF_TOKEN` | **a token created by this Space's account (PERDYPTO)** with read+write on the private dataset `Archnemix/Archx-Eval`. Used to fetch `bank/` and to publish relay state. |
+| `HF_DATA_TOKEN` | **created by the dataset owner (Archnemix)** with write access to its own dataset `Archnemix/Archx-Eval`, then pasted here. Fetches `bank/` and publishes relay state. No collaborator grant is needed: the token acts as the account that made it. |
 | `METRICS_TOKEN` | optional; gates `/metrics` |
 
 `BANK_FROM_DATASET` (default `true`) fetches `bank/` from the dataset at boot;

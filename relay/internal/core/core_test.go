@@ -324,15 +324,68 @@ func TestRespectsProxyHeadersForDifferentiation(t *testing.T) {
 	}
 }
 
+// Identity is "IP OR machine_id OR disk_uuid": any single marker must be enough
+// to serve and to recognise the caller. Requiring both device fields locked out
+// any runner that could only read one of them.
+func TestAnySingleMarkerIsEnough(t *testing.T) {
+	cases := []struct {
+		name          string
+		machine, disk string
+		wantMarkers   int // 1 for IP alone, 3 for IP + both
+	}{
+		{"ip only", "", "", 1},
+		{"machine only", machA, "", 2},
+		{"disk only", "", diskA, 2},
+		{"both", machA, diskA, 3},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, 10)
+			g, err := h.svc.RequestDraw(context.Background(), input("203.0.113.20", c.machine, c.disk))
+			if err != nil {
+				t.Fatalf("draw with %s: %v", c.name, err)
+			}
+			rec, ok := h.store.Get(g.IdentityID)
+			if !ok {
+				t.Fatal("expected a record")
+			}
+			if len(rec.Markers) != c.wantMarkers {
+				t.Fatalf("markers = %d, want %d: %v", len(rec.Markers), c.wantMarkers, rec.Markers)
+			}
+		})
+	}
+}
+
+// An absent device field must contribute no marker at all. If it were hashed,
+// every caller without that field would share one hash and collapse into a
+// single identity, which would be both wrong and a trivial denial of service.
+func TestAbsentFieldProducesNoMarker(t *testing.T) {
+	h := newHarness(t, 10)
+	g, err := h.svc.RequestDraw(context.Background(), input("203.0.113.21", "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := h.store.Get(g.IdentityID)
+	empty := h.svc.Hash(identity.MarkerMachineID, "")
+	for _, m := range rec.Markers {
+		if m == empty {
+			t.Fatal("an absent machine_id produced a marker; every such caller would share it")
+		}
+	}
+}
+
 func TestInvalidDeviceRejected(t *testing.T) {
 	h := newHarness(t, 10)
-	in := input("203.0.113.10", "", "")
-	if _, err := h.svc.RequestDraw(context.Background(), in); err == nil {
-		t.Fatal("expected missing machine id to fail")
+	// Present but fabricated: refused rather than hashed into a marker that
+	// would never match again.
+	for _, bad := range []string{"unknown", "none", "00000000-0000-0000-0000-000000000000"} {
+		if _, err := h.svc.RequestDraw(context.Background(), input("203.0.113.10", bad, diskA)); err == nil {
+			t.Fatalf("expected placeholder machine id %q to be rejected", bad)
+		}
 	}
-	in = input("203.0.113.10", "unknown", diskA)
-	if _, err := h.svc.RequestDraw(context.Background(), in); err == nil {
-		t.Fatal("expected placeholder machine id to fail")
+	// Too short to be a real identifier.
+	if _, err := h.svc.RequestDraw(context.Background(), input("203.0.113.10", "abc", "")); err == nil {
+		t.Fatal("expected an implausibly short machine id to be rejected")
 	}
 }
 

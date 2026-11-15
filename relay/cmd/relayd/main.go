@@ -58,7 +58,7 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 		log.Warn("RELAY_SALT is unset: using the insecure development salt. Every marker hash will change once a real salt is configured.")
 	}
 	if !cfg.HFEnabled {
-		log.Warn("HF_TOKEN is unset: dataset publishing is disabled")
+		log.Warn("HF_DATA_TOKEN is unset: the dataset is neither read nor written")
 	}
 
 	// Pull our own state back from the dataset before opening the store, so the
@@ -136,7 +136,7 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 		defer controller.Stop()
 		log.Info("dataset sync enabled", "interval", cfg.SyncInterval.String())
 	} else {
-		log.Warn("HF_TOKEN is unset: state stays local and is never published")
+		log.Warn("HF_DATA_TOKEN is unset: state stays local and is never published")
 	}
 	var _ hf.Remote
 

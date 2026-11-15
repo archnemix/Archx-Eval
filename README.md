@@ -65,16 +65,15 @@ auditable from the repository alone.
 The Space is deployed **by hand**, not from GitHub:
 
 ```bash
-export HF_TOKEN=hf_...       # PERDYPTO token with write on the Space
-python3 deploy/upload-space.py
+python3 deploy/upload-space.py     # builds ./space-upload, then drag it in
 ```
 
 The question bank is uploaded separately into the private dataset, because it is
 the answer key and must never sit in a public repository:
 
 ```bash
-export HF_TOKEN=hf_...       # token with write on Archnemix/Archx-Eval
-python3 deploy/upload-bank.py relay/testdata/bank
+export HF_DATA_TOKEN=hf_...   # created by Archnemix, write on its own dataset
+python3 deploy/upload-bank.py path/to/your/real/bank
 ```
 
 The relay fetches `bank/` from the dataset at boot, so a Space restart needs no

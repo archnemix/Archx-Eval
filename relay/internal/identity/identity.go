@@ -108,13 +108,18 @@ func FromRequest(remote netip.Addr, headers map[string][]string, dev Device, has
 		return nil, err
 	}
 
-	machineID, err := NormalizeIdentifier("machine_id", dev.MachineID, 16, 128)
+	// Identity is "IP OR machine_id OR disk_uuid": any one marker is enough to
+	// recognise a returning caller. Device fields are therefore optional, so a
+	// runner that can only read one of them is not locked out. A field that is
+	// present must still be sane -- a fabricated placeholder is refused rather
+	// than silently hashed into a marker that never matches again.
+	machineID, err := NormalizeOptional("machine_id", dev.MachineID, 16, 128)
 	if err != nil {
-		return nil, apierr.InvalidIdentity("machine_id is unusable")
+		return nil, apierr.InvalidIdentity(err.Error())
 	}
-	diskUUID, err := NormalizeIdentifier("disk_uuid", dev.DiskUUID, 8, 128)
+	diskUUID, err := NormalizeOptional("disk_uuid", dev.DiskUUID, 8, 128)
 	if err != nil {
-		return nil, apierr.InvalidIdentity("disk_uuid is unusable")
+		return nil, apierr.InvalidIdentity(err.Error())
 	}
 
 	id := &Identity{
@@ -129,10 +134,17 @@ func FromRequest(remote netip.Addr, headers map[string][]string, dev Device, has
 		UserAgent:     firstHeader(headers, "User-Agent"),
 	}
 	// Order matters: IP is the cheapest and most reliable marker, so it leads.
-	id.Markers = []Marker{
-		{Type: MarkerIP, Hash: hash(MarkerIP, ip.String())},
-		{Type: MarkerMachineID, Hash: hash(MarkerMachineID, machineID)},
-		{Type: MarkerDiskUUID, Hash: hash(MarkerDiskUUID, diskUUID)},
+	// Only markers the caller actually supplied are emitted, so an absent field
+	// cannot become a shared "empty" hash that would fuse every such caller
+	// into one identity.
+	id.Markers = []Marker{{Type: MarkerIP, Hash: hash(MarkerIP, ip.String())}}
+	if machineID != "" {
+		id.Markers = append(id.Markers,
+			Marker{Type: MarkerMachineID, Hash: hash(MarkerMachineID, machineID)})
+	}
+	if diskUUID != "" {
+		id.Markers = append(id.Markers,
+			Marker{Type: MarkerDiskUUID, Hash: hash(MarkerDiskUUID, diskUUID)})
 	}
 
 	id.Device = dev
@@ -223,6 +235,15 @@ func Network(ip netip.Addr) netip.Prefix {
 		return netip.PrefixFrom(ip, 24).Masked()
 	}
 	return netip.PrefixFrom(ip, 64).Masked()
+}
+
+// NormalizeOptional is NormalizeIdentifier for a field the caller may omit: an
+// empty value is not an error, it simply contributes no marker.
+func NormalizeOptional(kind, value string, minLen, maxLen int) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	return NormalizeIdentifier(kind, value, minLen, maxLen)
 }
 
 // NormalizeIdentifier validates a client-supplied opaque identifier.

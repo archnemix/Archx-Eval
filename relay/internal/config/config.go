@@ -124,8 +124,15 @@ func Load() Config {
 
 		SaltSecret: os.Getenv("RELAY_SALT"),
 
-		HFRepo:    envStr("HF_DATASET", "Archnemix/Archx-Eval"),
-		HFToken:   os.Getenv("HF_TOKEN"),
+		HFRepo: envStr("HF_DATASET", "Archnemix/Archx-Eval"),
+		// HF_DATA_TOKEN is the secret the Space carries for dataset access. It is
+		// created by the DATASET owner (Archnemix) and pasted into the Space's
+		// settings by hand; the Space's own account is never added as a
+		// collaborator and holds no token that can write this dataset.
+		//
+		// HF_TOKEN is still honoured as a fallback so existing deployments and
+		// local test scripts keep working, but the Space must use HF_DATA_TOKEN.
+		HFToken:   firstNonEmpty(os.Getenv("HF_DATA_TOKEN"), os.Getenv("HF_TOKEN")),
 		HFBaseURL: envStr("HF_BASE_URL", "https://huggingface.co"),
 
 		SyncInterval:  envDur("SYNC_INTERVAL", 30*time.Second),
@@ -191,6 +198,17 @@ func envList(key string, def []string) []string {
 		return def
 	}
 	return out
+}
+
+// firstNonEmpty returns the first non-empty value, so one config field can be
+// fed by a preferred environment variable and a legacy fallback.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func envStr(key, def string) string {

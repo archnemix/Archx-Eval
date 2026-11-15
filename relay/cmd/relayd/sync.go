@@ -93,7 +93,7 @@ func syncToDataset(cfg config.Config, svc *core.Service, log *slog.Logger, dryRu
 	case cfg.HFEnabled:
 		remote = newRemote(cfg)
 	default:
-		log.Warn("HF_TOKEN is unset: snapshot stays local", "dir", outDir)
+		log.Warn("HF_DATA_TOKEN is unset: snapshot stays local", "dir", outDir)
 		return nil
 	}
 

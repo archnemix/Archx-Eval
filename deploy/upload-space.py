@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
-"""Upload the relay source to the PERDYPTO Space.
+"""Stage the exact folder to drag onto the Space through the web UI.
 
-The Space belongs to a different Hugging Face account than the dataset, and the
-GitHub repository deliberately holds no token for it, so deployment is manual
-and explicit: run this, watch the build logs, done.
+You upload the Space by hand — Files -> Add file -> Upload files — so this
+script has no credentials and makes no network calls. It just builds a clean
+folder with precisely the files the Space needs, so you can drag the contents in
+without wondering which ones to include.
 
-    export HF_TOKEN=hf_...          # a PERDYPTO token with write on the Space
-    python3 deploy/upload-space.py
+    python3 deploy/upload-space.py                  # build ./space-upload
+    python3 deploy/upload-space.py --out ~/space    # or somewhere else
 
-Staging rules are the whole point of this script: exactly the files the Space
-needs, nothing else. In particular the question bank and the test fixtures are
-never uploaded, because the Space repository is a public artefact and the bank
-is the answer key.
+Then open the Space, use "Upload files", and drag everything from inside the
+output folder into the Space root.
+
+Two things are deliberately never staged:
+
+  * the question bank — it is the answer key and the Space repo is public
+  * test fixtures, tests, scripts and the Makefile — not needed to run
+
+The Space fetches `bank/` from the private dataset at boot instead.
 """
 
 import argparse
-import os
 import pathlib
 import shutil
 import sys
-import tempfile
-
-SPACE = "PERDYPTO/archx-eval"
 
 # Directories copied wholesale from relay/.
 DIRS = ("cmd", "internal")
@@ -31,9 +33,12 @@ FILES = ("Dockerfile", "go.mod")
 README = "deploy/space-README.md"
 
 
-def stage(repo_root: pathlib.Path) -> pathlib.Path:
+def stage(repo_root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
     relay = repo_root / "relay"
-    out = pathlib.Path(tempfile.mkdtemp(prefix="space-stage-"))
+
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
 
     for d in DIRS:
         src = relay / d
@@ -49,9 +54,8 @@ def stage(repo_root: pathlib.Path) -> pathlib.Path:
 
     shutil.copy2(repo_root / README, out / "README.md")
 
-    # Defence in depth: test files never ship, even if a directory copy caught
-    # one. The Dockerfile builds ./cmd/relayd, so removing them cannot break the
-    # image, and it keeps the staging list equal to what the docs promise.
+    # Test files are not needed to build or run, and the Dockerfile copies
+    # whatever is present into the image, so strip them.
     for p in out.rglob("*_test.go"):
         p.unlink()
 
@@ -60,44 +64,27 @@ def stage(repo_root: pathlib.Path) -> pathlib.Path:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--space", default=SPACE, help=f"target Space (default {SPACE})")
-    ap.add_argument("--dry-run", action="store_true", help="stage and list, upload nothing")
+    ap.add_argument("--out", default="space-upload", help="output folder (default: ./space-upload)")
     args = ap.parse_args()
 
-    token = os.environ.get("HF_TOKEN")
-    if not token and not args.dry_run:
-        sys.exit("HF_TOKEN is unset; it must be a PERDYPTO token with write on the Space")
-
     repo_root = pathlib.Path(__file__).resolve().parent.parent
-    staged = stage(repo_root)
+    out = (repo_root / args.out).resolve()
+    stage(repo_root, out)
 
-    files = sorted(str(p.relative_to(staged)) for p in staged.rglob("*") if p.is_file())
-    print(f"staged {len(files)} file(s) for {args.space}:")
+    files = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+
+    # Fail loudly rather than let the answer key be dragged in by accident.
+    leaked = [f for f in files if f.startswith(("testdata", "bank"))]
+    if leaked:
+        sys.exit(f"refusing to stage bank or fixture files: {leaked}")
+
+    print(f"staged {len(files)} file(s) in {out}")
     for f in files:
         print("  -", f)
-
-    # The bank must never appear in this list. Fail loudly rather than upload it.
-    leaked = [f for f in files if f.startswith("testdata") or f.startswith("bank")]
-    if leaked:
-        sys.exit(f"refusing to upload bank or fixture files: {leaked}")
-
-    if args.dry_run:
-        print("dry run: nothing uploaded")
-        return 0
-
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        sys.exit("pip install 'huggingface_hub>=0.24,<1' first")
-
-    api = HfApi(token=token)
-    api.upload_folder(
-        folder_path=str(staged),
-        repo_id=args.space,
-        repo_type="space",
-        commit_message="deploy relay",
-    )
-    print(f"uploaded to {args.space}; watch Logs -> Container for 'listening addr=:7860'")
+    print()
+    print("Next: open the Space -> Files -> Add file -> Upload files,")
+    print("then drag everything from inside that folder into the Space root.")
+    print("README.md must stay named README.md: its frontmatter selects the docker SDK.")
     return 0
 
 

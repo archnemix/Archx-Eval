@@ -187,7 +187,7 @@ Every setting is an environment variable — there is no config file, because a
 Hugging Face Space provides environment variables and nothing else.
 
 `RELAY_SALT` **must** be set in production and must never change: it keys every
-marker hash. `HF_TOKEN` enables dataset publishing. `ADMIN_TOKEN` enables the
+marker hash. `HF_DATA_TOKEN` enables dataset access (bank in, state out). `ADMIN_TOKEN` enables the
 operational endpoints. Missing values are reported at startup, and the service
 warns loudly when it falls back to the development salt.
 
