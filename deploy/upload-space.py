@@ -54,6 +54,13 @@ def stage(repo_root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
 
     shutil.copy2(repo_root / README, out / "README.md")
 
+    # Belt and braces: if a bank ever lands next to this file it will not be
+    # committed, and it will not be served by the Space either.
+    (out / ".gitignore").write_text(
+        "# Never commit data to this Space. It is public; the dataset is not.\n"
+        "bank/\ntestdata/\n*.env\n.env*\n"
+    )
+
     # Test files are not needed to build or run, and the Dockerfile copies
     # whatever is present into the image, so strip them.
     for p in out.rglob("*_test.go"):

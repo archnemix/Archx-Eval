@@ -1,0 +1,167 @@
+name: dataset
+
+# Everything that touches the Hugging Face dataset runs here, and nothing this
+# workflow does is ever committed back to the repository.
+#
+# Deliberately: `permissions: contents: read`, and there is no git commit step,
+# no `git add`, and no artefact containing dataset files. The bank is the answer
+# key; it must not appear in a public git history, and neither must anything
+# derived from it. CI output is limited to counts and file *names*.
+on:
+  push:
+    paths:
+      - 'ci/trigger/dataset.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'bank = upload the bank folder; verify = check token and list prefixes'
+        required: true
+        default: 'verify'
+        type: choice
+        options: [verify, bank]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dataset-writes
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: dataset (${{ github.event.inputs.action || 'bank' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the HF client
+        run: pip install --quiet "huggingface_hub>=0.24,<1"
+
+      - name: Resolve the action
+        id: act
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "action=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=bank" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the token can write the dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATASET: ${{ vars.HF_DATASET || 'Archnemix/Archx-Eval' }}
+        run: |
+          set -o pipefail
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "::error::secret HF_TOKEN is not set on this repository"
+            exit 1
+          fi
+          # Never print the token. Mask it even if a library tries to echo it.
+          echo "::add-mask::$HF_TOKEN"
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          repo = os.environ["DATASET"]
+          info = api.dataset_info(repo)
+          print(f"### dataset reachable")
+          print(f"- repo: `{info.id}`")
+          print(f"- private: `{getattr(info, 'private', 'unknown')}`")
+          print(f"- token length: {len(os.environ['HF_TOKEN'])} (value never printed)")
+          try:
+              perms = api.get_token_permission()
+              print(f"- permission: `{perms}`")
+              if str(perms).lower() not in ("write", "admin"):
+                  raise SystemExit(f"token permission is {perms}, need write")
+          except AttributeError:
+              print("- permission: not reportable by this client version")
+          PY
+
+      - name: Report what is already in the dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATASET: ${{ vars.HF_DATASET || 'Archnemix/Archx-Eval' }}
+        run: |
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          import os
+          from collections import Counter
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          files = api.list_repo_files(os.environ["DATASET"], repo_type="dataset")
+          counts = Counter(f.split("/")[0] for f in files)
+          print("### dataset contents (names only, never file bodies)")
+          if not files:
+              print("- empty")
+          for prefix, n in sorted(counts.items()):
+              print(f"- `{prefix}/` : {n} file(s)")
+          PY
+
+      - name: Upload the bank
+        if: steps.act.outputs.action == 'bank'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATASET: ${{ vars.HF_DATASET || 'Archnemix/Archx-Eval' }}
+          BANK_SRC: relay/testdata/bank
+        run: |
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          import os, pathlib, sys
+          from huggingface_hub import HfApi
+
+          src = pathlib.Path(os.environ["BANK_SRC"])
+          shards = sorted(src.rglob("*.jsonl"))
+          if not shards:
+              raise SystemExit(f"no .jsonl shards under {src}")
+
+          # Print the layout only. Never a question, never a solution.
+          print(f"### uploading {len(shards)} shard(s) from `{src}`")
+          for s in shards:
+              print(f"- `{s.relative_to(src)}` ({s.stat().st_size} bytes)")
+
+          bad = [str(s.relative_to(src)) for s in shards
+                 if '"tests"' not in s.read_text(errors="replace")
+                 and '"expected_answer"' not in s.read_text(errors="replace")
+                 and '"rubric"' not in s.read_text(errors="replace")]
+          if bad:
+              print(f"::warning::{len(bad)} shard(s) carry no tests/expected_answer/rubric")
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.upload_folder(
+              folder_path=str(src),
+              path_in_repo="bank",
+              repo_id=os.environ["DATASET"],
+              repo_type="dataset",
+              commit_message="bank: sync from CI",
+          )
+          print("### upload complete: restart the Space to pick it up")
+          PY
+
+      - name: Verify the bank landed
+        if: steps.act.outputs.action == 'bank'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATASET: ${{ vars.HF_DATASET || 'Archnemix/Archx-Eval' }}
+        run: |
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          files = [f for f in api.list_repo_files(os.environ["DATASET"], repo_type="dataset")
+                   if f.startswith("bank/")]
+          print(f"### bank/ now holds {len(files)} file(s)")
+          for f in sorted(files):
+              print(f"- `{f}`")
+          if not files:
+              raise SystemExit("bank/ is still empty after upload")
+          PY
+
+      # No commit step on purpose. Nothing this workflow reads or writes goes
+      # into git; the only persistent trace is the step summary above, which
+      # contains file names and counts, never file contents.
