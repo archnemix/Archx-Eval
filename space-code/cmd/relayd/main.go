@@ -104,7 +104,10 @@ func run(healthcheck, printCfg, doSync, dryRun bool) error {
 
 	// The rate log retention must exceed the longest window we evaluate, with
 	// headroom, or a restart would silently forget evidence of a flood.
-	retention := cfg.SpamBan
+	retention := cfg.BanWindow
+	if cfg.RateWindow > retention {
+		retention = cfg.RateWindow
+	}
 	if cfg.GlobalWindow > retention {
 		retention = cfg.GlobalWindow
 	}
@@ -211,6 +214,13 @@ func housekeep(ctx context.Context, svc *core.Service, cfg config.Config, log *s
 			}
 			if n > 0 {
 				log.Info("cleared expired bans", "count", n)
+			}
+			ledgerFiles, subnetBans, err := svc.PruneLedger(time.Now().UTC())
+			if err != nil {
+				log.Error("ledger prune failed", "err", err)
+			} else if ledgerFiles > 0 || subnetBans > 0 {
+				log.Info("pruned stored bans and ledger days",
+					"ledger_files", ledgerFiles, "subnet_bans", subnetBans)
 			}
 		case <-flushTicker.C:
 			if err := svc.Flush(); err != nil {

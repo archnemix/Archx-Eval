@@ -79,6 +79,21 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+
+	// Account for this request BEFORE the body is parsed. Without this a bot
+	// could send malformed JSON for ever: decoding fails here, the request
+	// never reaches the ladder, and flooding costs it nothing.
+	if err := s.svc.Admit(core.DrawInput{
+		Admitted:   true,
+		RequestID:  r.Header.Get("X-Request-Id"),
+		RemoteAddr: remoteAddrOf(r),
+		Headers:    collectHeaders(r),
+	}); err != nil {
+		s.logDeny(r.Header.Get("X-Request-Id"), err)
+		writeError(w, err)
+		return
+	}
+
 	var req drawRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
@@ -97,6 +112,7 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 
 	remote := remoteAddrOf(r)
 	in := core.DrawInput{
+		Admitted:   true,
 		RequestID:  reqID,
 		Categories: req.Categories,
 		Mix:        req.Mix,
@@ -178,18 +194,14 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		OS         string         `json:"os"`
 		Arch       string         `json:"arch"`
 		DurationS  float64        `json:"duration_s"`
+		Partial    bool           `json:"partial"`
 		Items      []feedbackItem `json:"items"`
 	}
+	// Partial is a deliberate opt-in, so it is carried separately for the text
+	// validator below rather than widening its anonymous struct.
+	_ = body.Partial
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, err)
-		return
-	}
-	if strings.TrimSpace(body.ModelID) == "" {
-		writeError(w, apierr.BadRequest("model_id is required"))
-		return
-	}
-	if len(body.Items) == 0 {
-		writeError(w, apierr.BadRequest("items may not be empty"))
 		return
 	}
 	if len(body.Items) > 500 {
@@ -201,28 +213,39 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := store.Result{
-		TS:         time.Now().UTC(),
+	exampleIDs := make([]string, 0, len(body.Items))
+	for _, it := range body.Items {
+		if strings.TrimSpace(it.ExampleID) == "" {
+			writeError(w, apierr.BadRequest("every item needs an example_id"))
+			return
+		}
+		exampleIDs = append(exampleIDs, it.ExampleID)
+	}
+
+	// Verification happens before anything is stored: the report must match a
+	// draw this relay actually issued, to this identity, and not already
+	// answered. Unverified results never reach the dataset.
+	res, err := s.svc.VerifyFeedback(core.FeedbackInput{
 		RequestID:  body.RequestID,
 		IdentityID: body.IdentityID,
 		ModelID:    body.ModelID,
 		RunnerVer:  body.RunnerVer,
 		OS:         body.OS,
 		Arch:       body.Arch,
-		Summary: store.ResultSummary{
-			Total:     len(body.Items),
-			ByCat:     map[string]float64{},
-			DurationS: body.DurationS,
-		},
+		DurationS:  body.DurationS,
+		ExampleIDs: exampleIDs,
+		Partial:    body.Partial,
+		RemoteAddr: remoteAddrOf(r),
+		Headers:    r.Header,
+	}, time.Now().UTC())
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 	var scoreSum float64
 	catSum := map[string]float64{}
 	catN := map[string]int{}
 	for _, it := range body.Items {
-		if strings.TrimSpace(it.ExampleID) == "" {
-			writeError(w, apierr.BadRequest("every item needs an example_id"))
-			return
-		}
 		res.Items = append(res.Items, store.ResultItem{
 			ExampleID:  it.ExampleID,
 			Category:   it.Category,
@@ -392,6 +415,7 @@ func validateFeedbackText(body struct {
 	OS         string         `json:"os"`
 	Arch       string         `json:"arch"`
 	DurationS  float64        `json:"duration_s"`
+	Partial    bool           `json:"partial"`
 	Items      []feedbackItem `json:"items"`
 }) error {
 	if len(body.ModelID) > maxModelIDLen {

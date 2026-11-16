@@ -51,6 +51,29 @@ type Record struct {
 	BannedUntil time.Time `json:"banned_until,omitempty"`
 	BanReason   string    `json:"ban_reason,omitempty"`
 	BanCount    int       `json:"ban_count,omitempty"`
+	// BanHistory is when each ban was stamped, newest last. The volume ladder
+	// reads it to decide how much to escalate: a caller who serves a short ban
+	// and immediately repeats is not treated the same as a first offender.
+	// Entries older than the policy's BanWindow stop counting, so good
+	// behaviour is eventually forgiven.
+	BanHistory []time.Time `json:"ban_history,omitempty"`
+}
+
+// SubnetBan is a ban on a whole network prefix (a /24 for IPv4, /64 for IPv6).
+//
+// It exists because per-identity bans are trivially escaped: rotate the IP and
+// you are a new identity with a clean record, mid-attack. The network ceiling
+// is the control that defends bank inventory against that, so it needs the same
+// durability as an identity ban instead of living only in the expiring rate log.
+//
+// Keyed by the hashed prefix, never the prefix itself, so this file stays as
+// free of network data as the rest of the store.
+type SubnetBan struct {
+	NetHash     string      `json:"net_hash"`
+	BannedUntil time.Time   `json:"banned_until"`
+	Reason      string      `json:"reason"`
+	BanCount    int         `json:"ban_count,omitempty"`
+	BanHistory  []time.Time `json:"ban_history,omitempty"`
 }
 
 // Banned reports whether the record is currently barred.
@@ -104,6 +127,15 @@ type Store struct {
 	records map[string]*Record  // id -> record
 	markers map[string][]string // marker hash -> ids
 
+	// subnetBans holds network-level bans, keyed by the hash of the prefix.
+	// Held in memory for the same reason records are: the check runs on every
+	// request and must not touch the disk.
+	subnetBans map[string]*SubnetBan
+
+	// ledger is the last few days of issued draws, keyed by request id. It is
+	// what makes feedback verifiable instead of trusted.
+	ledger map[string]LedgerEntry
+
 	events int
 }
 
@@ -112,20 +144,28 @@ func Open(dir string) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("store: empty data dir")
 	}
-	for _, sub := range []string{"identities", "markers", "events", "results"} {
+	for _, sub := range []string{"identities", "markers", "events", "results", "subnets", "ledger"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o750); err != nil {
 			return nil, fmt.Errorf("store: create %s: %w", sub, err)
 		}
 	}
 	s := &Store{
-		dir:     dir,
-		records: map[string]*Record{},
-		markers: map[string][]string{},
+		dir:        dir,
+		records:    map[string]*Record{},
+		markers:    map[string][]string{},
+		subnetBans: map[string]*SubnetBan{},
+		ledger:     map[string]LedgerEntry{},
 	}
 	if err := s.loadIndex(); err != nil {
 		return nil, err
 	}
 	if err := s.loadRecords(); err != nil {
+		return nil, err
+	}
+	if err := s.loadSubnetBans(); err != nil {
+		return nil, err
+	}
+	if err := s.loadLedger(time.Now().UTC(), 3); err != nil {
 		return nil, err
 	}
 	return s, nil

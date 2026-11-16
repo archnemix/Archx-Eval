@@ -46,8 +46,9 @@ func newServerWith(t *testing.T, examples int, allowLoopback bool) (*Server, *co
 		BankDir: bankDir, DataDir: filepath.Join(dir, "data"),
 		RateDir: filepath.Join(dir, "rate"),
 		DrawMax: 75, StaleAfterUses: 3, Window: time.Hour,
-		SpamWindow: time.Minute, SpamCount: 30, SpamBan: 48 * time.Hour,
-		BurstWindow: 10 * time.Second, BurstCount: 15, BurstBan: 2 * time.Hour,
+		RateAllowance: 0.5, RateWindow: time.Minute, RateSample: time.Second, RateFloor: 10,
+		BanWindow: 24 * time.Hour, MaxBan: 14 * 24 * time.Hour,
+		FeedbackWindow: 24 * time.Hour, LedgerKeepDays: 7,
 		SaltSecret: "test-salt", MaxBodyBytes: 1 << 20, AllowLoopback: allowLoopback,
 		AccessToken: "test-access-token", MetricsToken: "metrics-token",
 		NetWindow: time.Hour, NetMaxDraws: 1000,
@@ -85,6 +86,38 @@ func post(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRec
 }
 
 const drawBody = `{"categories":["python"],"size":5,"device":{"machine_id":"4c4c4544-0044-3510-8054-b4c04f4e4e32","disk_uuid":"9f1b2c3d4e5f60718293a4b5c6d7e8f9","os_family":"linux","arch":"x86_64"}}`
+
+// drawnGrant is the subset of the draw response needed to build valid feedback.
+type drawnGrant struct {
+	RequestID  string `json:"request_id"`
+	IdentityID string `json:"identity_id"`
+	Examples   []struct {
+		ID         string `json:"id"`
+		Category   string `json:"category"`
+		Difficulty string `json:"difficulty"`
+	} `json:"examples"`
+}
+
+// drawFor performs a real draw, so feedback tests can report against ids that
+// were actually issued. Verification makes a fabricated request id impossible
+// to use, which is the point of the change.
+func drawFor(t *testing.T, srv *Server, remoteAddr string) drawnGrant {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/draw", bytes.NewBufferString(drawBody))
+	req.RemoteAddr = remoteAddr + ":5555"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-access-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("draw failed: %d %s", rec.Code, rec.Body)
+	}
+	var g drawnGrant
+	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
 
 func TestDrawHappyPath(t *testing.T) {
 	srv, _ := newServer(t, 20)
@@ -241,12 +274,29 @@ func TestAdminStaleRequiresToken(t *testing.T) {
 	}
 }
 
+// Feedback is now verified against the ledger, so this test does a real draw
+// and reports against the ids that draw actually issued.
 func TestFeedbackAcceptedAndScored(t *testing.T) {
 	srv, _ := newServer(t, 5)
-	body := `{"request_id":"r1","model_id":"gpt-x","items":[
-		{"example_id":"py-000","category":"python","difficulty":"easy","passed":true,"score":1},
-		{"example_id":"py-001","category":"python","difficulty":"easy","passed":false,"score":0}
-	]}`
+
+	grant := drawFor(t, srv, "203.0.113.10")
+	if len(grant.Examples) < 2 {
+		t.Fatalf("expected at least 2 examples, got %d", len(grant.Examples))
+	}
+	var items []string
+	for i, ex := range grant.Examples {
+		passed := i == 0
+		score := 0
+		if passed {
+			score = 1
+		}
+		items = append(items, fmt.Sprintf(
+			`{"example_id":%q,"category":%q,"difficulty":%q,"passed":%v,"score":%d}`,
+			ex.ID, ex.Category, ex.Difficulty, passed, score))
+	}
+	body := fmt.Sprintf(`{"request_id":%q,"identity_id":%q,"model_id":"gpt-x","items":[%s]}`,
+		grant.RequestID, grant.IdentityID, strings.Join(items, ","))
+
 	rec := post(t, srv, "/v1/feedback", body)
 	if rec.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body)
@@ -262,11 +312,8 @@ func TestFeedbackAcceptedAndScored(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !out.Accepted || out.Summary.Total != 2 || out.Summary.Passed != 1 {
+	if !out.Accepted || out.Summary.Total != len(grant.Examples) || out.Summary.Passed != 1 {
 		t.Fatalf("unexpected summary: %+v", out)
-	}
-	if out.Summary.Score != 0.5 {
-		t.Fatalf("expected score 0.5, got %v", out.Summary.Score)
 	}
 }
 

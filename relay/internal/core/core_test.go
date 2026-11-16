@@ -49,12 +49,16 @@ func newHarness(t *testing.T, examplesPerCat int) *harness {
 		DrawMax:        75,
 		StaleAfterUses: 3,
 		Window:         time.Hour,
-		SpamWindow:     time.Minute,
-		SpamCount:      30,
-		SpamBan:        48 * time.Hour,
-		BurstWindow:    10 * time.Second,
-		BurstCount:     15,
-		BurstBan:       2 * time.Hour,
+		RateAllowance:  0.5,
+		RateWindow:     time.Minute,
+		RateSample:     time.Second,
+		// A floor keeps two rapid test requests from looking like a flood; the
+		// production default is 20.
+		RateFloor:      10,
+		BanWindow:      24 * time.Hour,
+		MaxBan:         14 * 24 * time.Hour,
+		FeedbackWindow: 24 * time.Hour,
+		LedgerKeepDays: 7,
 		SaltSecret:     "test-salt",
 		AllowLoopback:  true,
 		AccessToken:    "test-access-token",
@@ -88,6 +92,29 @@ func newHarness(t *testing.T, examplesPerCat int) *harness {
 }
 
 func (h *harness) advance(d time.Duration) { h.now = h.now.Add(d) }
+
+// reopen simulates a Space restart: fresh store, bank and service over the same
+// directories, which is what the relay does on every wake.
+func (h *harness) reopen() *harness {
+	st, err := store.Open(h.cfg.DataDir)
+	if err != nil {
+		panic("reopen store: " + err.Error())
+	}
+	bm, err := bank.Load(h.cfg.BankDir, h.cfg.StaleAfterUses)
+	if err != nil {
+		panic("reopen bank: " + err.Error())
+	}
+	rep, _ := reputation.Load("")
+	rates, err := ratelog.Open(h.cfg.RateDir, 96*time.Hour)
+	if err != nil {
+		panic("reopen ratelog: " + err.Error())
+	}
+	svc := New(h.cfg, st, bm, rep, rates)
+	h2 := &harness{svc: svc, bankM: bm, cfg: h.cfg, now: h.now, store: st, rates: rates}
+	svc.SetClock(func() time.Time { return h2.now })
+	rates.SetClock(func() time.Time { return h2.now })
+	return h2
+}
 
 func input(ip, machine, disk string) DrawInput {
 	return DrawInput{
@@ -223,7 +250,12 @@ func TestBurstSpamBans(t *testing.T) {
 	}
 }
 
-func TestBanSurvivesWindowReset(t *testing.T) {
+// A ban is stamped with a real duration and enforced until it expires, not just
+// for the length of the draw window. The old version of this test asserted a
+// fixed multi-hour ban; bans are now proportional to the offence, so a modest
+// overshoot earns minutes and the test checks the ban is actually in force
+// rather than checking a particular number.
+func TestBanEnforcedUntilItExpires(t *testing.T) {
 	h := newHarness(t, 200)
 	for i := 0; i < 20; i++ {
 		in := input("203.0.113.10", machA, diskA)
@@ -231,10 +263,33 @@ func TestBanSurvivesWindowReset(t *testing.T) {
 		h.advance(200 * time.Millisecond)
 		h.svc.RequestDraw(context.Background(), in)
 	}
-	h.advance(3 * time.Hour)
+
+	// Partway through the ban the caller is still refused, and the refusal
+	// reports roughly the time left rather than the original duration.
+	h.advance(5 * time.Minute)
 	_, err := h.svc.RequestDraw(context.Background(), input("203.0.113.10", machA, diskA))
-	if err == nil || !strings.Contains(err.Error(), "BANNED") {
-		t.Fatalf("expected the ban to outlive the window, got %v", err)
+	if err == nil {
+		t.Fatal("expected a refusal during the ban")
+	}
+	if !strings.Contains(err.Error(), "SPAM_RATE") && !strings.Contains(err.Error(), "BANNED") {
+		t.Fatalf("expected a ban refusal, got %v", err)
+	}
+}
+
+// After the ban expires the caller is served again, which is what makes a short
+// proportional ban acceptable: it is a delay, not a life sentence.
+func TestShortBanExpiresAndAllows(t *testing.T) {
+	h := newHarness(t, 200)
+	for i := 0; i < 20; i++ {
+		in := input("203.0.113.11", machA, diskA)
+		in.RequestID = fmt.Sprintf("r%d", i)
+		h.advance(200 * time.Millisecond)
+		h.svc.RequestDraw(context.Background(), in)
+	}
+	// Past both the ban and the draw window.
+	h.advance(2 * time.Hour)
+	if _, err := h.svc.RequestDraw(context.Background(), input("203.0.113.11", machA, diskA)); err != nil {
+		t.Fatalf("an expired ban must stop blocking: %v", err)
 	}
 }
 

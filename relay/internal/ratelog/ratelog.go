@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -218,6 +219,29 @@ func (l *Log) Count(key string, window time.Duration, now time.Time) int {
 		l.entries[key] = kept
 	}
 	return n
+}
+
+// Times returns the event timestamps inside the window, newest last. The peak
+// rate calculation needs the distribution, not just the count: 180 requests
+// spread over a minute and 180 in two seconds have the same Count but a very
+// different peak.
+func (l *Log) Times(key string, window time.Duration, now time.Time) []time.Time {
+	if window <= 0 {
+		return nil
+	}
+	cutoff := now.Add(-window).UnixMilli()
+
+	l.mu.Lock()
+	list := l.entries[key]
+	out := make([]time.Time, 0, len(list))
+	for _, t := range list {
+		if t >= cutoff {
+			out = append(out, time.UnixMilli(t).UTC())
+		}
+	}
+	l.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
 }
 
 // CountPrefix sums Count over every key sharing a prefix, used for subnet and

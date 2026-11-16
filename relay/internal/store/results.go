@@ -21,6 +21,13 @@ type Result struct {
 	Arch       string        `json:"arch,omitempty"`
 	Items      []ResultItem  `json:"items"`
 	Summary    ResultSummary `json:"summary"`
+
+	// Partial marks a run that did not cover every issued question, so the
+	// analysis can exclude it instead of being quietly skewed by it.
+	Partial bool `json:"partial,omitempty"`
+	// Issued is how many questions were handed out under this request, so a
+	// partial report is still interpretable.
+	Issued int `json:"issued,omitempty"`
 }
 
 // ResultItem is the outcome for a single example.

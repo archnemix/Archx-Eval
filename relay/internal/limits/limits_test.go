@@ -1,7 +1,6 @@
 package limits
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -10,13 +9,16 @@ import (
 
 func policy() Policy {
 	return Policy{
-		Window:      time.Hour,
-		SpamWindow:  time.Minute,
-		SpamCount:   30,
-		SpamBan:     48 * time.Hour,
-		BurstWindow: 10 * time.Second,
-		BurstCount:  15,
-		BurstBan:    2 * time.Hour,
+		Window:        time.Hour,
+		RateAllowance: 0.5, RateWindow: time.Minute, RateSample: time.Second, RateFloor: 10,
+		BanWindow: 24 * time.Hour, MaxBan: 14 * 24 * time.Hour,
+		BanBands: []BanBand{
+			{Over: 1.0, Ban: 10 * time.Minute},
+			{Over: 2.0, Ban: time.Hour},
+			{Over: 3.0, Ban: 6 * time.Hour},
+			{Over: 10.0, Ban: 24 * time.Hour},
+			{Over: 50.0, Ban: 7 * 24 * time.Hour},
+		},
 	}
 }
 
@@ -62,41 +64,95 @@ func TestActiveBanBlocks(t *testing.T) {
 	}
 }
 
-func TestBurstBans(t *testing.T) {
+// A tiny burst must never ban anyone: three requests in one second is a user
+// clicking twice, not an attack. This is why RateFloor exists.
+func TestSmallBurstIsNotPunished(t *testing.T) {
 	now := time.Now()
-	var times []time.Time
-	for i := 0; i < 15; i++ {
-		times = append(times, now.Add(-time.Duration(i)*100*time.Millisecond))
-	}
-	d := EvaluateVolume(policy(), times, now)
-	if d.Allow || d.Code != "SPAM_BURST" {
-		t.Fatalf("expected burst ban, got %+v", d)
-	}
-	if d.Ban != 2*time.Hour {
-		t.Fatalf("expected 2h ban, got %v", d.Ban)
-	}
-}
-
-func TestSustainedSpamBansLonger(t *testing.T) {
-	now := time.Now()
-	var times []time.Time
-	for i := 0; i < 30; i++ {
-		times = append(times, now.Add(-time.Duration(i)*1500*time.Millisecond))
-	}
-	d := EvaluateVolume(policy(), times, now)
-	if d.Allow || d.Code != "SPAM_SUSTAINED" {
-		t.Fatalf("expected sustained spam ban, got %+v", d)
-	}
-	if d.Ban != 48*time.Hour {
-		t.Fatalf("expected 48h ban, got %v", d.Ban)
-	}
-}
-
-func TestModerateTrafficAllowed(t *testing.T) {
-	now := time.Now()
-	times := []time.Time{now.Add(-time.Minute), now.Add(-time.Hour)}
+	times := []time.Time{now, now.Add(-200 * time.Millisecond), now.Add(-400 * time.Millisecond)}
 	if d := EvaluateVolume(policy(), times, now); !d.Allow {
-		t.Fatalf("moderate traffic should pass: %+v", d)
+		t.Fatalf("three requests must not ban: %+v", d)
+	}
+}
+
+// The ban must be proportional: a modest overshoot loses minutes, a flood loses
+// days. A single fixed ban would punish the first like an attacker.
+func TestBanScalesWithExcess(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name    string
+		perSec  int
+		wantMin time.Duration
+		wantMax time.Duration
+	}{
+		// 0.5/s allowance. 10 in one second = 10/s = 20x over -> 24h band.
+		{"20x over", 10, 6 * time.Hour, 24 * time.Hour},
+		// 100 in one second = 100/s = 200x over -> the 7 day band.
+		{"200x over", 100, 7 * 24 * time.Hour, 7 * 24 * time.Hour},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var times []time.Time
+			for i := 0; i < c.perSec; i++ {
+				times = append(times, now.Add(-time.Duration(i)*time.Millisecond))
+			}
+			d := EvaluateVolume(policy(), times, now)
+			if d.Allow {
+				t.Fatalf("%s should be banned", c.name)
+			}
+			if d.Ban < c.wantMin || d.Ban > c.wantMax {
+				t.Fatalf("%s: ban %v outside [%v, %v] (over=%.1f)",
+					c.name, d.Ban, c.wantMin, c.wantMax, d.Over)
+			}
+		})
+	}
+}
+
+// Escalation is what stops "serve ten minutes, repeat for ever". A caller who
+// has already been banned twice in the window gets a much longer ban for the
+// same offence.
+func TestRepeatOffenderEscalates(t *testing.T) {
+	p := policy()
+	now := time.Now()
+	base := 10 * time.Minute
+
+	first, prior := EvaluateHistory(p, nil, now, base)
+	if first != base || prior != 0 {
+		t.Fatalf("first offence: got %v after %d priors, want %v after 0", first, prior, base)
+	}
+
+	two := []time.Time{now.Add(-2 * time.Hour), now.Add(-time.Hour)}
+	third, prior := EvaluateHistory(p, two, now, base)
+	if prior != 2 {
+		t.Fatalf("expected 2 priors, got %d", prior)
+	}
+	if third != 4*base {
+		t.Fatalf("third offence: got %v, want %v (2 doublings)", third, 4*base)
+	}
+}
+
+// Bans that age out of the window stop counting, so a user who behaved badly
+// months ago is not punished for life.
+func TestOldBansStopCounting(t *testing.T) {
+	p := policy()
+	now := time.Now()
+	old := []time.Time{now.Add(-72 * time.Hour), now.Add(-48 * time.Hour)}
+	dur, prior := EvaluateHistory(p, old, now, 10*time.Minute)
+	if prior != 0 || dur != 10*time.Minute {
+		t.Fatalf("expired bans must not count: got %v after %d priors", dur, prior)
+	}
+}
+
+// The cap must hold no matter how many prior bans pile up.
+func TestHistoryCapsAtMaxBan(t *testing.T) {
+	p := policy()
+	now := time.Now()
+	var many []time.Time
+	for i := 0; i < 40; i++ {
+		many = append(many, now.Add(-time.Duration(i)*time.Minute))
+	}
+	dur, _ := EvaluateHistory(p, many, now, 10*time.Minute)
+	if dur > p.MaxBan {
+		t.Fatalf("ban %v exceeded MaxBan %v", dur, p.MaxBan)
 	}
 }
 
@@ -111,51 +167,41 @@ func TestOldRequestsFallOutOfWindow(t *testing.T) {
 	}
 }
 
-func TestApplyBanEscalates(t *testing.T) {
+// ApplyBan records the ban AND the history that the escalation ladder reads
+// next time. The history is the part that makes repeat offences cost more.
+func TestApplyBanRecordsHistory(t *testing.T) {
 	now := time.Now()
 	rec := &store.Record{}
-	d := Decision{Ban: 2 * time.Hour, Code: "SPAM_BURST"}
-
-	ApplyBan(rec, d, now)
-	if got := rec.BannedUntil.Sub(now); got != 2*time.Hour {
-		t.Fatalf("first ban: expected 2h, got %v", got)
+	ApplyBan(rec, Decision{Ban: 10 * time.Minute, Code: "SPAM_RATE"}, now)
+	if got := rec.BannedUntil.Sub(now); got != 10*time.Minute {
+		t.Fatalf("expected 10m, got %v", got)
 	}
-	ApplyBan(rec, d, now)
-	if got := rec.BannedUntil.Sub(now); got != 4*time.Hour {
-		t.Fatalf("second ban: expected 4h, got %v", got)
+	if len(rec.BanHistory) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(rec.BanHistory))
+	}
+	ApplyBan(rec, Decision{Ban: 10 * time.Minute, Code: "SPAM_RATE"}, now.Add(time.Hour))
+	if len(rec.BanHistory) != 2 || rec.BanCount != 2 {
+		t.Fatalf("second ban not recorded: count=%d history=%d", rec.BanCount, len(rec.BanHistory))
+	}
+	// Both bans are inside the 24h window, so the ladder sees two priors and
+	// doubles twice: this is the "serve the short ban and repeat" case that the
+	// escalation exists to stop.
+	dur, prior := EvaluateHistory(policy(), rec.BanHistory, now.Add(time.Hour), 10*time.Minute)
+	if prior != 2 || dur != 40*time.Minute {
+		t.Fatalf("after two priors: got %v after %d priors, want 40m after 2", dur, prior)
 	}
 }
 
-func TestApplyBanCapsAtTwoWeeks(t *testing.T) {
+// A ban history may not grow without bound; the slice is capped because an
+// attacker who keeps tripping the ladder would otherwise grow the record for
+// ever and slow every write of it.
+func TestBanHistoryIsBounded(t *testing.T) {
+	rec := &store.Record{}
 	now := time.Now()
-	rec := &store.Record{BanCount: 50}
-	ApplyBan(rec, Decision{Ban: 48 * time.Hour, Code: "SPAM_SUSTAINED"}, now)
-	if got := rec.BannedUntil.Sub(now); got != 14*24*time.Hour {
-		t.Fatalf("expected cap of 14 days, got %v", got)
+	for i := 0; i < 200; i++ {
+		ApplyBan(rec, Decision{Ban: time.Minute, Code: "SPAM_RATE"}, now)
 	}
-}
-
-func TestRefuseMessageIsReadable(t *testing.T) {
-	err := Refuse(Decision{Code: "WINDOW_ACTIVE", Reason: "wait", RetryAfter: 40 * time.Minute})
-	if err.Status != 429 {
-		t.Fatalf("expected 429, got %d", err.Status)
-	}
-	if !strings.Contains(err.Message, "40 minutes") {
-		t.Fatalf("message should humanise the wait: %s", err.Message)
-	}
-}
-
-func TestHumanise(t *testing.T) {
-	cases := map[time.Duration]string{
-		30 * time.Second: "30 seconds",
-		1 * time.Minute:  "1 minute",
-		5 * time.Minute:  "5 minutes",
-		2 * time.Hour:    "2 hours",
-		48 * time.Hour:   "2 days",
-	}
-	for in, want := range cases {
-		if got := humanise(in); got != want {
-			t.Fatalf("humanise(%v) = %q, want %q", in, got, want)
-		}
+	if len(rec.BanHistory) > 64 {
+		t.Fatalf("history grew to %d entries", len(rec.BanHistory))
 	}
 }

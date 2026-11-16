@@ -28,9 +28,25 @@ type Config struct {
 
 	Window time.Duration // one draw per window, per identity
 
-	SpamWindow time.Duration // "N requests in <SpamWindow>"
-	SpamCount  int
-	SpamBan    time.Duration
+	// Volume ladder: allowance is a sustained rate, and the ban is proportional
+	// to the excess. RateAllowance replaces the old fixed "N per minute" pair,
+	// which could not tell a burst from a drip and gave every offender in a
+	// band the same punishment.
+	RateAllowance float64
+	RateWindow    time.Duration
+	RateSample    time.Duration
+	RateFloor     int
+
+	// BanWindow is how far back prior bans count when escalating a repeat
+	// offender, and MaxBan caps any single ban.
+	BanWindow time.Duration
+	MaxBan    time.Duration
+
+	// FeedbackWindow is how old a draw may be when its results are reported.
+	// Beyond this the ledger entry is gone and the report is refused.
+	FeedbackWindow time.Duration
+	// LedgerKeepDays bounds how many daily ledger files are retained.
+	LedgerKeepDays int
 
 	BurstWindow time.Duration // "N requests in <BurstWindow>"
 	BurstCount  int
@@ -109,9 +125,16 @@ func Load() Config {
 
 		Window: envDur("WINDOW", time.Hour),
 
-		SpamWindow: envDur("SPAM_WINDOW", 60*time.Second),
-		SpamCount:  envInt("SPAM_COUNT", 30),
-		SpamBan:    envDur("SPAM_BAN", 48*time.Hour),
+		// 2 req/s sustained is generous for a human-driven runner (a draw is
+		// one request per hour per identity) and far below anything a flood
+		// needs, so the ladder bites only on automation.
+		RateAllowance:  envFloat("RATE_ALLOWANCE", 2),
+		RateWindow:     envDur("RATE_WINDOW", 60*time.Second),
+		RateSample:     envDur("RATE_SAMPLE", 1*time.Second),
+		BanWindow:      envDur("BAN_WINDOW", 24*time.Hour),
+		MaxBan:         envDur("MAX_BAN", 14*24*time.Hour),
+		FeedbackWindow: envDur("FEEDBACK_WINDOW", 24*time.Hour),
+		LedgerKeepDays: envInt("LEDGER_KEEP_DAYS", 7),
 
 		BurstWindow: envDur("BURST_WINDOW", 10*time.Second),
 		BurstCount:  envInt("BURST_COUNT", 15),
@@ -216,6 +239,20 @@ func envStr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envFloat parses a rate. Invalid values fall back to the default rather than
+// failing the boot: a mistyped limit should not stop the service from serving.
+func envFloat(key string, def float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 {
+		return def
+	}
+	return v
 }
 
 func envInt(key string, def int) int {
