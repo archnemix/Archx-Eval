@@ -22,7 +22,7 @@
 
 == window enforcement ==
   PASS  second draw refused                            429
-  PASS  retry-after advertised                         3600
+  PASS  retry-after advertised                         600
   PASS  ip rotation alone still blocked                429
 
 == restart persistence (the Space-sleep hole) ==
@@ -38,18 +38,20 @@
 
 == on-disk layout ==
 rate/34/net:cfb67c1d9c187c445030dea82f2f99f0.jsonl
+rate/3a/id:543e6af3a2e733816e326971b57cd8e6.jsonl
 rate/80/global.jsonl
 rate/82/id:32c6e788faa2d9e1b50d94c113348f91.jsonl
-store/events/2026-11-15.jsonl
-store/identities/80/81d93befc9894135e1a50532475eb501.json
+rate/e2/id:8e0f43913d116c705661860f982d300b.jsonl
+store/events/2026-11-16.jsonl
+store/identities/1d/7182b65c58a11d1c1ab124284287ff28.json
 store/index.json
+store/ledger/2026-11-16.jsonl
 store/markers/68/32c6e788faa2d9e1b50d94c113348f91.json
-store/markers/7b/c25d0bf389b7ddbae2216a76b6345f74.json
 store/markers/b8/8e0f43913d116c705661860f982d300b.json
 store/markers/ff/543e6af3a2e733816e326971b57cd8e6.json
 
 == event log sample ==
-{"ts":"2026-11-15T17:58:12.343904438Z","request_id":"","identity_id":"81d93befc9894135e1a50532475eb501","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
-{"ts":"2026-11-15T17:58:12.357666347Z","request_id":"","identity_id":"81d93befc9894135e1a50532475eb501","decision":"deny","reason":"WINDOW_ACTIVE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":3599}
+{"ts":"2026-11-16T17:11:54.777828112Z","request_id":"e8e0df9d4844e4fe2c6e089a91d97def","identity_id":"7182b65c58a11d1c1ab124284287ff28","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
+{"ts":"2026-11-16T17:11:54.787699048Z","request_id":"4a7da4c8261504002a2505f970e9a818","identity_id":"7182b65c58a11d1c1ab124284287ff28","decision":"ban","reason":"SPAM_RATE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":600}
 
 result: 21 passed, 0 failed

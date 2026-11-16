@@ -2,7 +2,7 @@ go:      go version go1.22.12 linux/amd64
 runner:  Linux / X64
 cpus:    4
 memory:  15Gi
-commit:  f428dfbc6930de95cd19fad0815a14920f71504f
+commit:  21012f382e58d2d507daa039a75af41504a5d9f2
 branch:  arena/a1d3d685-archx-eval
-started: 2026-11-15T17:57:23Z
--rwxr-xr-x 1 runner runner 6054148 Nov 15 17:57 ../ci/outputs/relayd
+started: 2026-11-16T17:10:20Z
+-rwxr-xr-x 1 runner runner 6111492 Nov 16 17:10 ../ci/outputs/relayd
