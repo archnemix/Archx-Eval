@@ -102,6 +102,22 @@ jobs:
               print(f"- `{prefix}/` : {n} file(s)")
           PY
 
+      # The bank is the answer key, so publishing a fixture as if it were the
+      # real bank is worse than publishing nothing: the Space would serve 14
+      # placeholder questions and every score drawn from it would be noise.
+      - name: Refuse to publish the fixture as the bank
+        if: steps.act.outputs.action == 'bank'
+        env:
+          BANK_SRC: relay/testdata/bank
+        run: |
+          if [ -d "$BANK_SRC" ]; then
+            echo "::error::$BANK_SRC is the test fixture, not the real bank."
+            echo "Point BANK_SRC at the authored bank and remove this guard only"
+            echo "when the file it publishes is the real answer key."
+            exit 1
+          fi
+          echo "$BANK_SRC is absent, as expected before the real bank exists"
+
       - name: Upload the bank
         if: steps.act.outputs.action == 'bank'
         env:
