@@ -223,3 +223,48 @@ func TestRejectsEmptyKey(t *testing.T) {
 		t.Fatal("expected empty key to be rejected")
 	}
 }
+
+// The retention cutoff is applied while loading, so the clock used at Open
+// decides whether history survives. Reopening on the wall clock while history
+// was written on another clock silently drops everything -- which is exactly
+// what happened once the calendar moved past a frozen test date.
+func TestOpenAtUsesTheSuppliedClockForRetention(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+
+	l, err := OpenAt(dir, 48*time.Hour, func() time.Time { return base })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := l.Record("id:abc", base.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same clock, an hour later: history is well inside retention and must load.
+	again, err := OpenAt(dir, 48*time.Hour, func() time.Time { return base.Add(time.Hour) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The window must span the events: they were written at base, and the
+	// clock has moved on an hour.
+	if got := again.Count("id:abc", 2*time.Hour, base.Add(time.Hour)); got != 5 {
+		t.Fatalf("expected all 5 events to reload, got %d", got)
+	}
+	_ = again.Close()
+
+	// Far ahead of the entries: they are older than retention and are dropped.
+	// This is the failure mode, asserted so it can never come back by accident.
+	stale, err := OpenAt(dir, 48*time.Hour, func() time.Time { return base.Add(100 * time.Hour) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stale.Count("id:abc", 200*time.Hour, base.Add(100*time.Hour)); got != 0 {
+		t.Fatalf("expected expired events to be dropped, got %d", got)
+	}
+	_ = stale.Close()
+}

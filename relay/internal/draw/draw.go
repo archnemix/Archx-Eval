@@ -100,20 +100,31 @@ func Select(m *bank.Manager, req Request) (*Result, error) {
 		}
 	}
 
+	// Shuffle each category once and draw from the front of that deck. The
+	// earlier code sampled the proportional share at random and then sliced
+	// pools[cat][taken:] for the remainder, so the second pass could hand out
+	// an example the first pass had already picked. A grant with the same
+	// question twice is unusable: the reporter sends two answers for one id and
+	// the feedback endpoint refuses the whole report as a duplicate.
+	decks := make(map[string][]*bank.Example, len(cats))
+	for _, cat := range cats {
+		decks[cat] = shuffledCopy(pools[cat])
+	}
+
 	// Hand out the proportional share first.
 	taken := map[string]int{}
 	for _, cat := range cats {
 		n := desired[cat]
-		if n > len(pools[cat]) {
-			n = len(pools[cat])
+		if n > len(decks[cat]) {
+			n = len(decks[cat])
 		}
 		if n <= 0 {
 			continue
 		}
-		picked := sample(pools[cat], n)
+		picked := decks[cat][:n]
 		res.Examples = append(res.Examples, picked...)
-		taken[cat] = len(picked)
-		remaining -= len(picked) - desired[cat]
+		taken[cat] = n
+		remaining -= n - desired[cat]
 	}
 
 	// Distribute the remainder to any category that still has stock.
@@ -123,12 +134,12 @@ func Select(m *bank.Manager, req Request) (*Result, error) {
 			if remaining <= 0 {
 				break
 			}
-			spare := len(pools[cat]) - taken[cat]
-			if spare <= 0 {
+			// Both passes draw from the same shuffled deck and the index only
+			// moves forward, so an example can never be issued twice.
+			if taken[cat] >= len(decks[cat]) {
 				continue
 			}
-			extra := sample(pools[cat][taken[cat]:], 1)
-			res.Examples = append(res.Examples, extra...)
+			res.Examples = append(res.Examples, decks[cat][taken[cat]])
 			taken[cat]++
 			remaining--
 			progressed = true
@@ -194,6 +205,14 @@ func sample(pool []*bank.Example, n int) []*bank.Example {
 		tmp[i], tmp[j] = tmp[j], tmp[i]
 	}
 	return tmp[:n]
+}
+
+// shuffledCopy returns a randomly ordered copy; the pool itself is not touched.
+func shuffledCopy(pool []*bank.Example) []*bank.Example {
+	out := make([]*bank.Example, len(pool))
+	copy(out, pool)
+	shuffleExamples(out)
+	return out
 }
 
 func shuffleExamples(list []*bank.Example) {

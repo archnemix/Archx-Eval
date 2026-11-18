@@ -105,7 +105,10 @@ func (h *harness) reopen() *harness {
 		panic("reopen bank: " + err.Error())
 	}
 	rep, _ := reputation.Load("")
-	rates, err := ratelog.Open(h.cfg.RateDir, 96*time.Hour)
+	// Opened on the harness clock: load applies the retention cutoff, and the
+	// harness date is frozen, so the wall clock would discard everything.
+	now := h.now
+	rates, err := ratelog.OpenAt(h.cfg.RateDir, 96*time.Hour, func() time.Time { return now })
 	if err != nil {
 		panic("reopen ratelog: " + err.Error())
 	}

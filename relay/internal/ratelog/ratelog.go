@@ -60,6 +60,14 @@ type Log struct {
 // Open loads any existing log under dir, discarding entries older than
 // retention. retention should exceed the largest window the caller uses.
 func Open(dir string, retention time.Duration) (*Log, error) {
+	return OpenAt(dir, retention, nil)
+}
+
+// OpenAt is Open with a caller-supplied clock. The retention cutoff is applied
+// during load, so a caller that runs on a different clock -- a test harness
+// with a frozen date, most obviously -- must supply it here or every entry is
+// discarded as stale. Passing nil uses the wall clock.
+func OpenAt(dir string, retention time.Duration, clock func() time.Time) (*Log, error) {
 	if dir == "" {
 		return nil, errors.New("ratelog: empty directory")
 	}
@@ -75,6 +83,9 @@ func Open(dir string, retention time.Duration) (*Log, error) {
 		entries:   map[string][]int64{},
 		files:     map[string]*os.File{},
 		clock:     func() time.Time { return time.Now().UTC() },
+	}
+	if clock != nil {
+		l.clock = clock
 	}
 	if err := l.load(); err != nil {
 		return nil, err

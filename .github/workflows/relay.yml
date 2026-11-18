@@ -171,6 +171,66 @@ jobs:
           overwrite: true
           retention-days: 1
 
+  # -------------------------------------------------------------- runner ----
+  # The front runner is the only client the relay has, so it is tested against
+  # a real relay rather than a mock. Its suite builds the binary, starts it on
+  # loopback, draws, answers with a fake provider and reports: if the contract
+  # between runner and relay drifts, this fails here instead of in a user's run.
+  runner:
+    name: runner (draw, answer, report)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: relay/go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the runner
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet pytest
+          python -m pip install --quiet -e ./runner
+
+      - name: Run the runner suite
+        run: |
+          set -o pipefail
+          mkdir -p ci/logs ci/outputs
+          set +e
+          (cd runner && python -m pytest -q) 2>&1 | tee ci/logs/runner.txt
+          echo "$?" > ci/outputs/runner-exit-code.txt
+
+      - name: Assert the suite passed
+        run: |
+          code=$(cat ci/outputs/runner-exit-code.txt 2>/dev/null || echo 1)
+          passed=$(grep -oE '[0-9]+ passed' ci/logs/runner.txt | tail -1 | cut -d' ' -f1)
+          skipped=$(grep -oE '[0-9]+ skipped' ci/logs/runner.txt | tail -1 | cut -d' ' -f1)
+          passed=${passed:-0}
+          skipped=${skipped:-0}
+          echo "runner exit: $code, passed: $passed, skipped: $skipped"
+          # A skipped end-to-end test means the binary did not build, which would
+          # make this job a decoration. Only the no-Go path may skip.
+          [ "$code" = "0" ] || { echo "::error::runner suite failed"; exit 1; }
+          [ "$skipped" = "0" ] || { echo "::error::$skipped runner tests skipped; the end-to-end test must run"; exit 1; }
+
+      - name: Upload logs for the collect job
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-runner-logs
+          path: |
+            ci/logs/runner.txt
+            ci/outputs/runner-exit-code.txt
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
   # --------------------------------------------------------- image build ----
   image:
     name: image (static build + container)
@@ -236,7 +296,7 @@ jobs:
   # from outside. Runs even when an earlier job failed.
   collect:
     name: collect (commit results into ci/)
-    needs: [test, smoke, image]
+    needs: [test, smoke, image, runner]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -279,14 +339,17 @@ jobs:
             "test: ${{ needs.test.result }}" \
             "smoke: ${{ needs.smoke.result }}" \
             "image: ${{ needs.image.result }}" \
+            "runner: ${{ needs.runner.result }}" \
             > ci/outputs/run-summary.txt
           smoke_checks=$(grep -c '  PASS  ' ci/logs/smoke.txt 2>/dev/null) || smoke_checks=0
           smoke_failures=$(grep -c '  FAIL  ' ci/logs/smoke.txt 2>/dev/null) || smoke_failures=0
           test_cases=$(grep -c '^=== RUN' ci/logs/test.txt 2>/dev/null) || test_cases=0
+          runner_passed=$(grep -oE '[0-9]+ passed' ci/logs/runner.txt 2>/dev/null | tail -1 | cut -d' ' -f1) || runner_passed=0
           printf '%s\n' \
             "smoke_checks=$smoke_checks" \
             "smoke_failures=$smoke_failures" \
             "test_cases=$test_cases" \
+            "runner_passed=${runner_passed:-0}" \
             >> ci/outputs/run-summary.txt
 
           echo "== ci tree =="
@@ -315,5 +378,5 @@ jobs:
           fi
           git commit -m "ci(relay): run ${{ github.run_id }} results
 
-          test=${{ needs.test.result }} smoke=${{ needs.smoke.result }} image=${{ needs.image.result }}"
+          test=${{ needs.test.result }} smoke=${{ needs.smoke.result }} image=${{ needs.image.result }} runner=${{ needs.runner.result }}"
           git push

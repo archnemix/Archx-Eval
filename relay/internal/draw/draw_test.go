@@ -172,3 +172,50 @@ func TestSelectIsRandomised(t *testing.T) {
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }
+
+// TestSelectRemainderNeverRepeats covers the path the plain duplicate test
+// misses. When the requested size does not divide evenly across categories
+// there is a remainder to hand out, and the first pass has already taken a
+// random subset of each pool. Slicing the pool by count and sampling again from
+// that slice can return an example that was already issued, which makes the
+// whole grant unusable: the reporter sends two answers for one id and the
+// feedback endpoint rejects it as a duplicate.
+func TestSelectRemainderNeverRepeats(t *testing.T) {
+	m := bankWith(t, map[string]int{"python": 10, "logic": 30})
+	for i := 0; i < 200; i++ {
+		res, err := Select(m, Request{Categories: []string{"python", "logic"}, Size: 7})
+		if err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if len(res.Examples) != 7 {
+			t.Fatalf("expected 7, got %d", len(res.Examples))
+		}
+		seen := map[string]bool{}
+		for _, ex := range res.Examples {
+			if seen[ex.ID] {
+				t.Fatalf("run %d: duplicate example %s (total %v)", i, ex.ID, len(res.Examples))
+			}
+			seen[ex.ID] = true
+		}
+	}
+}
+
+// TestSelectNeverExceedsStock: the same fix must not start inventing examples
+// when a category is smaller than its share.
+func TestSelectNeverExceedsStock(t *testing.T) {
+	m := bankWith(t, map[string]int{"python": 2, "logic": 20})
+	res, err := Select(m, Request{Categories: []string{"python", "logic"}, Size: 20})
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, ex := range res.Examples {
+		if seen[ex.ID] {
+			t.Fatalf("duplicate example %s", ex.ID)
+		}
+		seen[ex.ID] = true
+	}
+	if len(res.Examples) != 20 {
+		t.Fatalf("expected the full 20 from stock, got %d", len(res.Examples))
+	}
+}
