@@ -43,7 +43,7 @@ rate/80/global.jsonl
 rate/82/id:32c6e788faa2d9e1b50d94c113348f91.jsonl
 rate/e2/id:8e0f43913d116c705661860f982d300b.jsonl
 store/events/2026-11-18.jsonl
-store/identities/12/a670b14fb219b2b80c07fa9de4e7cd3f.json
+store/identities/92/251087ba8bde13d918610e3a85da9e08.json
 store/index.json
 store/ledger/2026-11-18.jsonl
 store/markers/68/32c6e788faa2d9e1b50d94c113348f91.json
@@ -51,7 +51,7 @@ store/markers/b8/8e0f43913d116c705661860f982d300b.json
 store/markers/ff/543e6af3a2e733816e326971b57cd8e6.json
 
 == event log sample ==
-{"ts":"2026-11-18T14:29:30.704907411Z","request_id":"819518bb1b7988bec36cf8e5deea9d8f","identity_id":"a670b14fb219b2b80c07fa9de4e7cd3f","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
-{"ts":"2026-11-18T14:29:30.715758422Z","request_id":"24d65458c2e598301355496784b53deb","identity_id":"a670b14fb219b2b80c07fa9de4e7cd3f","decision":"ban","reason":"SPAM_RATE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":600}
+{"ts":"2026-11-18T14:31:43.908893065Z","request_id":"665fc1ce8ee91482b0f2ee7b4add31d7","identity_id":"251087ba8bde13d918610e3a85da9e08","decision":"allow","reason":"granted","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64"}
+{"ts":"2026-11-18T14:31:43.92693075Z","request_id":"178f481290ba8eac53d99806a4312680","identity_id":"251087ba8bde13d918610e3a85da9e08","decision":"ban","reason":"SPAM_RATE","ip_hash":"32c6e788faa2d9e1b50d94c113348f91","network_hash":"cfb67c1d9c187c445030dea82f2f99f0","os":"linux","arch":"x86_64","retry_after_s":600}
 
 result: 21 passed, 0 failed
