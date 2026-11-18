@@ -1,11 +1,13 @@
 job: collect
-run: 43915478003
-commit: 21012f382e58d2d507daa039a75af41504a5d9f2
+run: 44324463396
+commit: 00f5775699d4b09b2fccab91856d225e1d036b8f
 branch: arena/a1d3d685-archx-eval
-finished: 2026-11-16T17:12:06Z
+finished: 2026-11-18T14:29:48Z
 test: success
 smoke: success
 image: success
+runner: failure
 smoke_checks=21
 smoke_failures=0
-test_cases=170
+test_cases=173
+runner_passed=0
