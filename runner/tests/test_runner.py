@@ -194,22 +194,40 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _go_binary() -> str | None:
+    """Find a Go toolchain, without inventing one.
+
+    No GOROOT or GOCACHE default here on purpose: a path that exists in one
+    developer's sandbox does not exist on a CI runner, and setting it makes the
+    build fail in a way that looks like "Go is missing".
+    """
+    for candidate in (shutil.which("go"), "/usr/local/go/bin/go", "/tmp/gopkg/go/bin/go"):
+        if candidate and Path(candidate).exists():
+            return candidate
+    return None
+
+
 def _build_relay(tmp_path: Path) -> Path | None:
-    """Build the real relay binary, or return None if Go is unavailable."""
-    go = shutil.which("go") or "/tmp/gopkg/go/bin/go"
-    if not Path(go).exists():
+    """Build the real relay binary.
+
+    Returns None only when there is no Go toolchain at all. A toolchain that is
+    present but fails to build is a test failure, not a skip: silently skipping
+    would turn the one test that proves the contract into decoration.
+    """
+    go = _go_binary()
+    if go is None:
         return None
     out = tmp_path / "relayd"
-    env = dict(os.environ)
-    env.setdefault("GOROOT", "/tmp/gopkg/go")
-    env.setdefault("GOCACHE", "/tmp/gocache")
-    env["CGO_ENABLED"] = "0"
+    env = {**os.environ, "CGO_ENABLED": "0"}
     result = subprocess.run(
         [go, "build", "-o", str(out), "./cmd/relayd"],
         cwd=RELAY_DIR, env=env, capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return None
+        raise AssertionError(
+            "Go is installed but the relay did not build, so the end-to-end "
+            f"contract cannot be checked:\n{result.stdout}\n{result.stderr}"
+        )
     return out
 
 
